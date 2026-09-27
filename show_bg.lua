@@ -24,8 +24,14 @@ if not bestMon then
 end
 
 local mon = bestMon
-mon.setTextScale(0.1)
+mon.setTextScale(0.5)
 local monW, monH = mon.getSize()
+
+-- ---- CHANGE THIS to resize the image ----
+-- 1.0   = fills the whole monitor (default)
+-- 0.5   = half size, centered, black around it
+-- 1.5   = 150% size, centered, edges get cropped off-screen
+local IMG_SCALE = 1.0
 
 local IMG_PATH = "bg.nfp"
 if not fs.exists(IMG_PATH) then
@@ -60,11 +66,18 @@ local function scaleImage(image, targetW, targetH)
   return scaled
 end
 
-local finalImg = scaleImage(img, monW, monH)
+local drawW = math.max(1, math.floor(monW * IMG_SCALE))
+local drawH = math.max(1, math.floor(monH * IMG_SCALE))
+local finalImg = scaleImage(img, drawW, drawH)
+
+-- center it on the monitor (if smaller, black shows around it;
+-- if bigger, the excess just draws off-screen and gets clipped)
+local drawX = math.floor((monW - drawW) / 2) + 1
+local drawY = math.floor((monH - drawH) / 2) + 1
 
 mon.setBackgroundColor(colors.black)
 mon.clear()
-paintutils.drawImage(finalImg, 1, 1, mon)
+paintutils.drawImage(finalImg, drawX, drawY, mon)
 
-print("Background image is now showing on the monitor (" .. monW .. "x" .. monH .. ").")
+print("Background image is now showing on the monitor (" .. drawW .. "x" .. drawH .. " at scale " .. IMG_SCALE .. ").")
 print("Run slot_machine to go back to the game.")
