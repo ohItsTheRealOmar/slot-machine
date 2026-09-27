@@ -53,6 +53,44 @@ local function sfx(name, vol, pitch)
   if speaker then pcall(speaker.playSound, name, vol or 1, pitch or 1) end
 end
 
+-- ============================= BACKGROUND MUSIC =============================
+-- A simple looping "doop da doop da da doop" riff, played through
+-- speaker.playNote (note-block style tones -- distinct from the one-shot
+-- sfx() sound effects used for spin ticks/wins elsewhere). Runs on its
+-- own coroutine (see musicLoop in the main loop) so it never blocks
+-- button input or the spin/bonus animations.
+local MUSIC_INSTRUMENT = "pling" -- try "bit" for a more 8-bit/chiptune tone
+local MUSIC_MIN_VOL, MUSIC_MAX_VOL, MUSIC_VOL_STEP = 0, 3, 0.5
+local musicVolume = 1.5
+
+-- pitch is 0-24 (12 = middle); len/rest are seconds. This spells out
+-- "DOOP-da-DOOP-da-da-DOOP" then a beat of silence before it repeats.
+local MUSIC_RIFF = {
+  { pitch = 6,  len = 0.28, rest = 0.05 }, -- DOOP
+  { pitch = 13, len = 0.14, rest = 0.05 }, -- da
+  { pitch = 6,  len = 0.28, rest = 0.05 }, -- DOOP
+  { pitch = 13, len = 0.14, rest = 0.05 }, -- da
+  { pitch = 15, len = 0.14, rest = 0.05 }, -- da
+  { pitch = 18, len = 0.34, rest = 0.60 }, -- DOOP (resolves, then a rest)
+}
+
+local function changeVolume(delta)
+  musicVolume = math.max(MUSIC_MIN_VOL, math.min(MUSIC_MAX_VOL, musicVolume + delta))
+end
+
+local function musicLoop()
+  if not speaker then return end -- no speaker attached -- nothing to loop
+  while true do
+    for _, note in ipairs(MUSIC_RIFF) do
+      if musicVolume > 0 then
+        pcall(speaker.playNote, MUSIC_INSTRUMENT, musicVolume, note.pitch)
+      end
+      sleep(note.len)
+      if note.rest and note.rest > 0 then sleep(note.rest) end
+    end
+  end
+end
+
 math.randomseed(os.epoch("utc"))
 
 local c = colors
@@ -711,7 +749,8 @@ local function drawHud(message, msgColor)
 
   term.setTextColor(colors.white)
   term.setCursorPos(2, h - hudH + 1)
-  term.write("BET/LINE: $" .. money(bet) .. "  LINES: " .. linesPlayed .. "  TOTAL BET: $" .. money(totalBet()))
+  term.write("BET/LINE: $" .. money(bet) .. "  LINES: " .. linesPlayed .. "  TOTAL BET: $" .. money(totalBet())
+    .. "  VOL: " .. (musicVolume <= 0 and "MUTE" or string.format("%.1f", musicVolume)))
 
   if message then
     term.setTextColor(msgColor or colors.yellow)
@@ -729,6 +768,8 @@ local function drawButtons()
     { "-LN", 16 },
     { "+LN", 22 },
     { "MAXBET", 28 },
+    { "VOL-", 37 },
+    { "VOL+", 44 },
     { "SPIN!", w - 8 },
   }
   for _, s in ipairs(specs) do
@@ -1224,6 +1265,12 @@ local function handleButton(label)
     bet = maxBet
     linesPlayed = maxLines
     refreshControls()
+  elseif label == "VOL-" then
+    changeVolume(-MUSIC_VOL_STEP)
+    refreshControls()
+  elseif label == "VOL+" then
+    changeVolume(MUSIC_VOL_STEP)
+    refreshControls()
   end
 end
 
@@ -1296,4 +1343,9 @@ local function animationLoop()
   end
 end
 
-parallel.waitForAny(inputLoop, animationLoop)
+-- waitForAll, not waitForAny: musicLoop returns immediately (by design) if
+-- there's no speaker attached, and waitForAny would treat that as "we're
+-- done" and kill the whole program the instant that happened. waitForAll
+-- just lets the other two loops (which never return on their own) keep
+-- running forever either way.
+parallel.waitForAll(inputLoop, animationLoop, musicLoop)
