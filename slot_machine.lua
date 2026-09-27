@@ -11,12 +11,18 @@
    - Retriggers add more free spins mid-bonus
    - BIG WIN! banner for any win over $25
    - Touch-screen buttons (Advanced Monitor) + keyboard fallback on the computer
+   - Optional real-money mode: ties into your server's actual economy via
+     a Player Detector, instead of the machine's own pretend credits (see
+     the ECONOMY BRIDGE section below -- off by default, "practice mode",
+     until you fill in the two functions it needs)
 
   SETUP
    1. Place a 3x4 wall of Advanced Monitors (3 wide, 4 tall).
    2. Place a Computer (Advanced Computer for color) touching the monitor wall.
    3. Optionally place a Speaker next to the computer for sound.
-   4. On the computer: wget the raw URL of this file, then run it.
+   4. Optionally place a Player Detector (Advanced Peripherals mod) within
+      DETECT_RANGE blocks of the computer, if you want real-money mode.
+   5. On the computer: wget the raw URL of this file, then run it.
 --]]
 
 -- ============================= SETUP =============================
@@ -51,10 +57,137 @@ math.randomseed(os.epoch("utc"))
 
 local c = colors
 
+-- ============================= PLAYER DETECTOR =============================
+-- Requires a "Player Detector" peripheral (Advanced Peripherals mod)
+-- somewhere in range of this computer -- it tells the machine who's
+-- standing at it, so it knows whose real balance to show/charge. If none
+-- is found, the machine just falls back to practice mode (see below).
+local playerDetector = peripheral.find("playerDetector")
+local DETECT_RANGE = 4 -- blocks; widen/narrow to match where players stand
+
+local currentPlayer = nil -- name of whoever is currently detected, or nil
+
+local function refreshCurrentPlayer()
+  if not playerDetector then return end
+  local ok, players = pcall(playerDetector.getPlayersInRange, DETECT_RANGE)
+  if ok and players and #players > 0 then
+    currentPlayer = players[1]
+  else
+    currentPlayer = nil
+  end
+end
+
+-- ============================= ECONOMY BRIDGE =============================
+-- Hooks the machine up to your server's REAL money system, so spins bet
+-- and pay out of a player's actual balance instead of the machine's own
+-- pretend credit pile.
+--
+-- Only the two functions below need filling in, whatever the real system
+-- turns out to be -- everything else in this file already routes every
+-- credit change through them. Three worked examples are commented out
+-- underneath, covering the three likely shapes of "the server's money
+-- system": a CC:Tweaked peripheral, a command-based economy plugin, or a
+-- database reachable over HTTP. Ask your friend which one applies, fill
+-- in that one, then flip ECONOMY_ENABLED to true.
+--
+-- Until then, ECONOMY_ENABLED stays false and the machine runs exactly
+-- like it did before -- its own fake $1000 starting pile, no real money
+-- touched -- so nothing here breaks your testing in the meantime.
+local ECONOMY_ENABLED = false
+local STARTING_CREDITS = 1000.00
+
+-- Must return the player's current real balance (a number), or nil plus
+-- an error string if it couldn't be read.
+local function economyGetBalance(playerName)
+  return nil, "economy not wired up yet (see ECONOMY BRIDGE comment)"
+end
+
+-- Must apply `delta` to the player's REAL balance -- positive pays them,
+-- negative charges them -- and return true on success, or false plus an
+-- error string if it didn't go through.
+local function economyAdjustBalance(playerName, delta)
+  return false, "economy not wired up yet (see ECONOMY BRIDGE comment)"
+end
+
+--[[
+  EXAMPLE A -- a CC:Tweaked peripheral (a "bank"/"vault"/"ATM" block from a
+  mod like Advanced Peripherals, or a custom one your friend built). Swap
+  in whatever the real peripheral type and method names turn out to be:
+
+    local bank = peripheral.find("bank")
+    local function economyGetBalance(playerName)
+      local ok, bal = pcall(bank.getBalance, playerName)
+      if ok then return bal end
+      return nil, "peripheral call failed"
+    end
+    local function economyAdjustBalance(playerName, delta)
+      local ok, err = pcall(function()
+        if delta >= 0 then bank.deposit(playerName, delta)
+        else bank.withdraw(playerName, -delta) end
+      end)
+      return ok, (not ok) and tostring(err) or nil
+    end
+
+  EXAMPLE B -- a command-based economy plugin (like an EssentialsX-style
+  "/eco give"/"/eco take"), run from a Command Computer block so the
+  "commands" API is available:
+
+    local function economyGetBalance(playerName)
+      local ok, result = commands.exec("balance " .. playerName)
+      -- result's exact shape depends on the plugin -- you'll likely need
+      -- to pull the number back out of its text/JSON output here
+      if not ok then return nil, "command failed" end
+      return tonumber(result), nil
+    end
+    local function economyAdjustBalance(playerName, delta)
+      local cmd = delta >= 0
+        and ("eco give " .. playerName .. " " .. string.format("%.2f", delta))
+        or  ("eco take " .. playerName .. " " .. string.format("%.2f", -delta))
+      local ok = commands.exec(cmd)
+      return ok, (not ok) and "command failed" or nil
+    end
+
+  EXAMPLE C -- the economy lives behind a small web API (needs the "http"
+  API enabled in the CC:Tweaked config, and this URL allowed there):
+
+    local API_BASE = "http://your-bridge-host:PORT"
+    local function economyGetBalance(playerName)
+      local res = http.get(API_BASE .. "/balance/" .. textutils.urlEncode(playerName))
+      if not res then return nil, "request failed" end
+      local body = res.readAll(); res.close()
+      local data = textutils.unserializeJSON(body)
+      if data and data.balance then return data.balance end
+      return nil, "bad response"
+    end
+    local function economyAdjustBalance(playerName, delta)
+      local res = http.post(API_BASE .. "/adjust",
+        textutils.serializeJSON({ player = playerName, delta = delta }),
+        { ["Content-Type"] = "application/json" })
+      if not res then return false, "request failed" end
+      res.close()
+      return true
+    end
+]]
+
 -- ============================= STATE =============================
 -- Credits/bet are tracked to the cent (like a real machine) since the
 -- paytable below is tuned to a tighter ~5 cent hold per dollar wagered.
-local credits = 1000.00
+-- `credits` is a local cache of whatever balance is currently in play --
+-- the player's real one when ECONOMY_ENABLED, or the practice pile when
+-- not -- kept in sync by syncBalance() below.
+local credits = STARTING_CREDITS
+local economyError = nil
+
+local function syncBalance()
+  if not ECONOMY_ENABLED or not currentPlayer then return end
+  local bal, err = economyGetBalance(currentPlayer)
+  if bal then
+    credits = bal
+    economyError = nil
+  else
+    economyError = err or "couldn't read balance"
+  end
+end
 local bet = 10
 local betStep = 5
 local minBet, maxBet = 5, 200
@@ -559,10 +692,24 @@ local function drawHud(message, msgColor)
     term.setCursorPos(1, yy)
     term.write(string.rep(" ", w))
   end
-  term.setTextColor(colors.white)
   term.setCursorPos(2, h - hudH)
-  term.write("CREDITS: $" .. money(credits))
+  if ECONOMY_ENABLED then
+    if not currentPlayer then
+      term.setTextColor(colors.red)
+      term.write("STAND ON THE DETECTOR TO PLAY")
+    elseif economyError then
+      term.setTextColor(colors.red)
+      term.write("ECONOMY ERROR: " .. economyError)
+    else
+      term.setTextColor(colors.white)
+      term.write(currentPlayer .. "  CREDITS: $" .. money(credits))
+    end
+  else
+    term.setTextColor(colors.white)
+    term.write("CREDITS: $" .. money(credits) .. "  (practice mode)")
+  end
 
+  term.setTextColor(colors.white)
   term.setCursorPos(2, h - hudH + 1)
   term.write("BET/LINE: $" .. money(bet) .. "  LINES: " .. linesPlayed .. "  TOTAL BET: $" .. money(totalBet()))
 
@@ -726,11 +873,33 @@ end
 -- isn't mid-spin/mid-bonus: advances the rainbow-wild cycle and the herd,
 -- and repaints only those small pieces (never the whole frame), so it's
 -- cheap enough to run continuously without slowing the buttons down.
+-- Player Detector / balance polling runs much slower than the visual
+-- animation (once every ~1.2s, not every ~0.15s) -- it's a real peripheral
+-- call (and, once wired up, a real economy lookup), so there's no reason
+-- to hammer it 6-7 times a second.
+local PLAYER_POLL_EVERY = 8 -- idle ticks (~1.2s at ANIM_INTERVAL=0.15)
+local idleTickCount = 0
+
+-- idleTick itself is only ever called while not spinning (see
+-- animationLoop in the main loop below), so there's no need to re-check
+-- that here.
 local function idleTick()
   rainbowTick = rainbowTick + 1
   redrawWildCells(currentGrid)
   herdTick = herdTick + 1
   drawHerd()
+
+  idleTickCount = idleTickCount + 1
+  if idleTickCount >= PLAYER_POLL_EVERY then
+    idleTickCount = 0
+    local before = currentPlayer
+    refreshCurrentPlayer()
+    if ECONOMY_ENABLED and currentPlayer ~= before then
+      syncBalance()
+      drawFrame() -- new player (or nobody) at the machine -- repaint the
+                  -- HUD immediately rather than waiting on input
+    end
+  end
 end
 
 -- ============================= WIN LINES =============================
@@ -936,6 +1105,13 @@ local function runBonus(triggerScatters)
     end
   end
 
+  if ECONOMY_ENABLED and bonusTotal > 0 then
+    -- best-effort: the bonus total is already fully won at this point, so
+    -- we pay it out even if this particular call fails to go through --
+    -- credits (the on-screen number) still reflects it either way, and
+    -- the next syncBalance() call will reconcile against the real value.
+    economyAdjustBalance(currentPlayer, bonusTotal)
+  end
   credits = credits + bonusTotal
   bannerAnim("BONUS TOTAL: $" .. money(bonusTotal) .. "!", colors.yellow, 2)
 end
@@ -944,12 +1120,39 @@ end
 local spinning = false
 local function doSpin()
   if spinning then return end
+
+  if ECONOMY_ENABLED then
+    if not currentPlayer then
+      drawHud("STAND ON THE DETECTOR TO PLAY", colors.red)
+      drawButtons()
+      return
+    end
+    syncBalance() -- re-check the REAL balance right before betting, in
+                   -- case it changed elsewhere since we last saw them
+    if economyError then
+      drawHud("ECONOMY ERROR: " .. economyError, colors.red)
+      drawButtons()
+      return
+    end
+  end
+
   if credits < totalBet() then
     drawHud("NOT ENOUGH CREDITS", colors.red)
     drawButtons()
     return
   end
+
   spinning = true
+
+  if ECONOMY_ENABLED then
+    local ok, err = economyAdjustBalance(currentPlayer, -totalBet())
+    if not ok then
+      spinning = false
+      drawHud("ECONOMY ERROR: " .. (err or "bet failed"), colors.red)
+      drawButtons()
+      return
+    end
+  end
   credits = credits - totalBet()
   drawFrame()
 
@@ -961,6 +1164,9 @@ local function doSpin()
   local scatters = countScatters(grid)
 
   if win > 0 then
+    if ECONOMY_ENABLED then
+      economyAdjustBalance(currentPlayer, win)
+    end
     credits = credits + win
     flashWin(grid, hits)
     drawWinLines(winLines)
@@ -980,6 +1186,11 @@ local function doSpin()
     runBonus(scatters)
   end
 
+  if ECONOMY_ENABLED then
+    syncBalance() -- pull the authoritative real balance back in, so any
+                   -- rounding or a failed best-effort payout above gets
+                   -- corrected on screen rather than silently drifting
+  end
   drawFrame()
   spinning = false
 end
