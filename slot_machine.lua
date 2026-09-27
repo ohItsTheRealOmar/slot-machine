@@ -181,6 +181,121 @@ local CARD_SUITS = {
   A = { bitmap = DIAMOND, shapeColor = c.red,   cardColor = c.white, labelColor = c.red },
 }
 
+-- ============================= BIG BLOCK FONT =============================
+-- A simple 5x7 pixel font, just the letters needed to spell out the
+-- splash screen title. Add more letters here later if you want to reuse
+-- drawBigText for other big titles.
+local FONT_5x7 = {
+  A = {"01110","10001","10001","11111","10001","10001","10001"},
+  B = {"11110","10001","10001","11110","10001","10001","11110"},
+  D = {"11110","10001","10001","10001","10001","10001","11110"},
+  F = {"11111","10000","10000","11110","10000","10000","10000"},
+  G = {"01111","10000","10000","10011","10001","10001","01111"},
+  L = {"10000","10000","10000","10000","10000","10000","11111"},
+  O = {"01110","10001","10001","10001","10001","10001","01110"},
+  U = {"10001","10001","10001","10001","10001","10001","01110"},
+}
+
+-- how big each font "pixel" is drawn, in real character cells. Monitor
+-- characters are taller than they are wide, so pixels are wider than
+-- tall to make letters look roughly square. Tweak these to resize.
+local BIGTEXT_PIXEL_W = 2
+local BIGTEXT_PIXEL_H = 1
+
+-- Draws text using the big block font, centered horizontally, top edge
+-- at topY. Only lit pixels are drawn (unlit pixels are left alone), so
+-- it layers cleanly over a background image or solid color.
+local function drawBigText(text, topY, color)
+  local letterGap = 1 -- gap columns between letters, in font pixels
+  local spaceWidth = 3 -- width of a literal space, in font pixels
+
+  local totalPixelCols = 0
+  for i = 1, #text do
+    local ch = text:sub(i, i)
+    totalPixelCols = totalPixelCols + (ch == " " and spaceWidth or (5 + letterGap))
+  end
+  local totalWidthChars = totalPixelCols * BIGTEXT_PIXEL_W
+  local curX = math.max(1, math.floor((w - totalWidthChars) / 2) + 1)
+
+  term.setBackgroundColor(color)
+  for i = 1, #text do
+    local ch = text:sub(i, i)
+    if ch == " " then
+      curX = curX + spaceWidth * BIGTEXT_PIXEL_W
+    else
+      local glyph = FONT_5x7[ch]
+      if glyph then
+        for gy = 1, 7 do
+          local rowStr = glyph[gy]
+          for gx = 1, 5 do
+            if rowStr:sub(gx, gx) == "1" then
+              for py = 0, BIGTEXT_PIXEL_H - 1 do
+                for px = 0, BIGTEXT_PIXEL_W - 1 do
+                  term.setCursorPos(curX + (gx - 1) * BIGTEXT_PIXEL_W + px, topY + (gy - 1) * BIGTEXT_PIXEL_H + py)
+                  term.write(" ")
+                end
+              end
+            end
+          end
+        end
+      end
+      curX = curX + (5 + letterGap) * BIGTEXT_PIXEL_W
+    end
+  end
+end
+
+-- ============================= START SCREEN =============================
+-- Chasing/blinking marquee lights around the very edge of the screen.
+-- offset shifts which cells are lit each frame, giving a chasing effect.
+local function drawBorderLights(offset, onColor)
+  local perimeter = {}
+  for x = 1, w do perimeter[#perimeter+1] = {x, 1} end
+  for y = 2, h - 1 do perimeter[#perimeter+1] = {w, y} end
+  for x = w, 1, -1 do perimeter[#perimeter+1] = {x, h} end
+  for y = h - 1, 2, -1 do perimeter[#perimeter+1] = {1, y} end
+
+  for i, pos in ipairs(perimeter) do
+    local lit = (i + offset) % 3 == 0
+    term.setCursorPos(pos[1], pos[2])
+    term.setBackgroundColor(lit and onColor or colors.black)
+    term.write(" ")
+  end
+end
+
+local function playStartupJingle()
+  if not speaker then return end
+  local jingle = {8, 10, 12, 15, 19, 24}
+  for _, pitch in ipairs(jingle) do
+    pcall(speaker.playNote, "bell", 2, pitch)
+    sleep(0.12)
+  end
+end
+
+local function showStartScreen()
+  drawBackground() -- shows bg.nfp behind the splash if you have one, else black
+
+  -- kick off the jingle in parallel with the light/title animation
+  parallel.waitForAny(playStartupJingle, function()
+    local titleY = math.floor(h / 2) - 5
+    for frame = 1, 40 do
+      drawBorderLights(frame, colors.yellow)
+      if frame == 6 then
+        drawBigText("BUFFALO", titleY, colors.yellow)
+      end
+      if frame == 14 then
+        drawBigText("GOLD", titleY + 9, colors.orange)
+      end
+      sleep(0.1)
+    end
+  end)
+
+  -- hold the finished splash a bit longer with lights still chasing
+  for frame = 41, 70 do
+    drawBorderLights(frame, colors.yellow)
+    sleep(0.1)
+  end
+end
+
 local baseWeights  = { WILD=2, SCAT=2, BUF=4, EAG=5, WLF=6, ELK=7, A=9, K=9, Q=9, J=9 }
 local bonusWeights = { WILD=6, SCAT=1, BUF=5, EAG=5, WLF=6, ELK=6, A=8, K=8, Q=8, J=8 }
 local scatterSpins = { [3]=8, [4]=15, [5]=20 }
@@ -603,6 +718,8 @@ local function pointInButton(x, y, b)
 end
 
 -- ============================= BOOT =============================
+showStartScreen()
+
 currentGrid = genGrid(baseWeights, nil)
 drawFrame()
 centerText(2, "TOUCH SPIN OR PRESS [SPACE]   BET +/- WITH KEYS", colors.lightGray)
