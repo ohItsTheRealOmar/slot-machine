@@ -58,8 +58,18 @@ local betStep = 5
 local minBet, maxBet = 5, 200
 local currentGrid = nil -- last grid shown; drawFrame always redraws this so the screen never goes blank
 
+-- Lines played is a bet multiplier -- more lines = more of the grid's
+-- "ways" you're covering, at a proportionally higher total wager, same
+-- idea as picking more paylines on a real machine.
+local linesPlayed = 9
+local minLines, maxLines = 1, 9
+
 local function money(v)
   return string.format("%.2f", v)
+end
+
+local function totalBet()
+  return bet * linesPlayed
 end
 
 -- ============================= BACKGROUND IMAGE =============================
@@ -481,10 +491,14 @@ local function drawHud(message, msgColor)
   end
   term.setTextColor(colors.white)
   term.setCursorPos(2, h - hudH)
-  term.write("CREDITS: $" .. money(credits) .. "    BET: $" .. money(bet))
+  term.write("CREDITS: $" .. money(credits))
+
+  term.setCursorPos(2, h - hudH + 1)
+  term.write("BET/LINE: $" .. money(bet) .. "  LINES: " .. linesPlayed .. "  TOTAL BET: $" .. money(totalBet()))
+
   if message then
     term.setTextColor(msgColor or colors.yellow)
-    term.setCursorPos(2, h - hudH + 1)
+    term.setCursorPos(2, h - 1)
     term.write(message)
   end
 end
@@ -495,7 +509,9 @@ local function drawButtons()
   local specs = {
     { "-BET", 2 },
     { "+BET", 9 },
-    { "MAXBET", 16 },
+    { "-LN", 16 },
+    { "+LN", 22 },
+    { "MAXBET", 28 },
     { "SPIN!", w - 8 },
   }
   for _, s in ipairs(specs) do
@@ -530,6 +546,45 @@ local function drawGrid(grid, highlights)
     for row = 1, ROWS do
       local hl = highlights[r] and highlights[r][row]
       drawCell(r, row, grid[r][row], hl)
+    end
+  end
+end
+
+-- ============================= WIN LINES =============================
+local WIN_LINE_COLOR = colors.cyan
+
+local function cellCenter(r, row)
+  local x, y = cellPos(r, row)
+  return x + math.floor((cellW - 1) / 2), y + math.floor((cellH - 2) / 2)
+end
+
+-- simple Bresenham line between two character-grid points
+local function drawLineSeg(x1, y1, x2, y2, color)
+  term.setBackgroundColor(color)
+  local dx, dy = math.abs(x2 - x1), -math.abs(y2 - y1)
+  local sx = x1 < x2 and 1 or -1
+  local sy = y1 < y2 and 1 or -1
+  local err = dx + dy
+  local x, y = x1, y1
+  while true do
+    term.setCursorPos(x, y)
+    term.write(" ")
+    if x == x2 and y == y2 then break end
+    local e2 = 2 * err
+    if e2 >= dy then err = err + dy; x = x + sx end
+    if e2 <= dx then err = err + dx; y = y + sy end
+  end
+end
+
+-- Draws an actual connecting line through every winning symbol group's
+-- path, on top of the settled/flashed grid.
+local function drawWinLines(winLines)
+  for _, wl in ipairs(winLines) do
+    for i = 1, #wl.path - 1 do
+      local p1, p2 = wl.path[i], wl.path[i + 1]
+      local x1, y1 = cellCenter(p1.r, p1.row)
+      local x2, y2 = cellCenter(p2.r, p2.row)
+      drawLineSeg(x1, y1, x2, y2, WIN_LINE_COLOR)
     end
   end
 end
@@ -581,26 +636,38 @@ local function bannerAnim(text, col, holdTime)
 end
 
 -- ============================= SCORING =============================
+-- Returns (winAmount, hits, winLines):
+--  hits     -- [reel][row]=true for every cell that's part of ANY win,
+--              used for the white flash.
+--  winLines -- one entry per winning symbol group, each with a path of
+--              {r, row} points (one representative row per reel) so a
+--              line can be drawn straight through the win.
 local function evaluateWays(grid)
-  local total, hits = 0, {}
+  local total, hits, winLines = 0, {}, {}
   for key, sym in pairs(SYM) do
     if sym.pay then
       local consecutive, waysMult = 0, 1
+      local path = {}
       for r = 1, REELS do
         local count = 0
+        local chosenRow = nil
         for row = 1, ROWS do
           local s = grid[r][row]
-          if s == key or SYM[s].wild then count = count + 1 end
+          if s == key or SYM[s].wild then
+            count = count + 1
+            if not chosenRow then chosenRow = row end
+          end
         end
         if count > 0 then
           consecutive = consecutive + 1
           waysMult = waysMult * count
+          path[#path + 1] = { r = r, row = chosenRow }
         else
           break
         end
       end
       if consecutive >= 3 and sym.pay[consecutive] then
-        local amount = sym.pay[consecutive] * waysMult * (bet / 10)
+        local amount = sym.pay[consecutive] * waysMult * (totalBet() / 10)
         total = total + amount
         for r = 1, consecutive do
           hits[r] = hits[r] or {}
@@ -609,12 +676,13 @@ local function evaluateWays(grid)
             if s == key or SYM[s].wild then hits[r][row] = true end
           end
         end
+        winLines[#winLines + 1] = { symbol = key, path = path }
       end
     end
   end
   -- round to the nearest cent (not the nearest whole credit) so the
   -- small, realistic paytable values above actually show up
-  return math.floor(total * 100 + 0.5) / 100, hits
+  return math.floor(total * 100 + 0.5) / 100, hits, winLines
 end
 
 local function countScatters(grid)
@@ -644,11 +712,12 @@ local function runBonus(triggerScatters)
     currentGrid = grid
     animateSpin(grid, bonusWeights)
 
-    local win, hits = evaluateWays(grid)
+    local win, hits, winLines = evaluateWays(grid)
     win = win * multiplier
     if win > 0 then
       bonusTotal = bonusTotal + win
       flashWin(grid, hits)
+      drawWinLines(winLines)
       drawHud("YOU WIN $" .. money(win) .. "!", colors.lime)
     else
       drawHud("NO WIN THIS FREE SPIN", colors.red)
@@ -672,24 +741,25 @@ end
 local spinning = false
 local function doSpin()
   if spinning then return end
-  if credits < bet then
+  if credits < totalBet() then
     drawHud("NOT ENOUGH CREDITS")
     return
   end
   spinning = true
-  credits = credits - bet
+  credits = credits - totalBet()
   drawFrame()
 
   local grid = genGrid(baseWeights, nil)
   currentGrid = grid
   animateSpin(grid, baseWeights)
 
-  local win, hits = evaluateWays(grid)
+  local win, hits, winLines = evaluateWays(grid)
   local scatters = countScatters(grid)
 
   if win > 0 then
     credits = credits + win
     flashWin(grid, hits)
+    drawWinLines(winLines)
     drawHud("YOU WIN $" .. money(win) .. "!", colors.lime)
   else
     drawHud("NO WIN - TRY AGAIN", colors.red)
@@ -705,16 +775,34 @@ local function doSpin()
 end
 
 -- ============================= INPUT =============================
+-- drawHud() alone clears the whole HUD strip (which includes the button
+-- row), so every bet/lines change has to redraw the buttons afterward too
+-- -- otherwise they vanish until the next full spin/frame redraw.
+local function refreshControls()
+  drawHud()
+  drawButtons()
+end
+
 local function changeBet(delta)
   bet = math.max(minBet, math.min(maxBet, bet + delta))
-  drawHud()
+  refreshControls()
+end
+
+local function changeLines(delta)
+  linesPlayed = math.max(minLines, math.min(maxLines, linesPlayed + delta))
+  refreshControls()
 end
 
 local function handleButton(label)
   if label == "SPIN!" then doSpin()
   elseif label == "-BET" then changeBet(-betStep)
   elseif label == "+BET" then changeBet(betStep)
-  elseif label == "MAXBET" then bet = math.min(maxBet, credits); drawHud()
+  elseif label == "-LN" then changeLines(-1)
+  elseif label == "+LN" then changeLines(1)
+  elseif label == "MAXBET" then
+    bet = maxBet
+    linesPlayed = maxLines
+    refreshControls()
   end
 end
 
@@ -743,7 +831,12 @@ while true do
     if p1 == keys.space then doSpin()
     elseif p1 == keys.minus then changeBet(-betStep)
     elseif p1 == keys.equals or p1 == keys.plus then changeBet(betStep)
-    elseif p1 == keys.m then bet = math.min(maxBet, credits); drawHud()
+    elseif p1 == keys.leftBracket then changeLines(-1)
+    elseif p1 == keys.rightBracket then changeLines(1)
+    elseif p1 == keys.m then
+      bet = maxBet
+      linesPlayed = maxLines
+      refreshControls()
     end
   end
 end
