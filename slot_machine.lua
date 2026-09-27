@@ -134,14 +134,14 @@ end
 local SYM = {
   WILD = { label = "WILD", fg = c.black,     bg = c.yellow,    wild = true },
   SCAT = { label = "COIN", fg = c.white,     bg = c.orange,    scatter = true },
-  BUF  = { label = "BUFF", fg = c.white,     bg = c.brown,     pay = {[3]=78.51,  [4]=392.57, [5]=2355.41} },
-  EAG  = { label = "EAGL", fg = c.black,     bg = c.lightGray, pay = {[3]=62.81,  [4]=235.54, [5]=1177.70} },
-  WLF  = { label = "WOLF", fg = c.white,     bg = c.gray,      pay = {[3]=47.11,  [4]=157.03, [5]=785.13} },
-  ELK  = { label = "ELK ", fg = c.black,     bg = c.lime,      pay = {[3]=31.41,  [4]=125.62, [5]=628.11} },
-  A    = { label = " A  ", fg = c.red,       bg = c.white,     pay = {[3]=15.70,  [4]=62.81,  [5]=314.05} },
-  K    = { label = " K  ", fg = c.black,     bg = c.white,     pay = {[3]=15.70,  [4]=47.11,  [5]=235.54} },
-  Q    = { label = " Q  ", fg = c.red,       bg = c.white,     pay = {[3]=15.70,  [4]=47.11,  [5]=235.54} },
-  J    = { label = " J  ", fg = c.black,     bg = c.white,     pay = {[3]=15.70,  [4]=31.41,  [5]=157.03} },
+  BUF  = { label = "BUFF", fg = c.white,     bg = c.brown,     pay = {[3]=78.66,  [4]=393.32, [5]=2359.89} },
+  EAG  = { label = "EAGL", fg = c.black,     bg = c.lightGray, pay = {[3]=62.93,  [4]=235.99, [5]=1179.94} },
+  WLF  = { label = "WOLF", fg = c.white,     bg = c.gray,      pay = {[3]=47.20,  [4]=157.33, [5]=786.62} },
+  ELK  = { label = "ELK ", fg = c.black,     bg = c.lime,      pay = {[3]=31.47,  [4]=125.86, [5]=629.30} },
+  A    = { label = " A  ", fg = c.red,       bg = c.white,     pay = {[3]=15.73,  [4]=62.93,  [5]=314.65} },
+  K    = { label = " K  ", fg = c.black,     bg = c.white,     pay = {[3]=15.73,  [4]=47.20,  [5]=235.99} },
+  Q    = { label = " Q  ", fg = c.red,       bg = c.white,     pay = {[3]=15.73,  [4]=47.20,  [5]=235.99} },
+  J    = { label = " J  ", fg = c.black,     bg = c.white,     pay = {[3]=15.73,  [4]=31.47,  [5]=157.33} },
 }
 
 -- ============================= PAYLINES =============================
