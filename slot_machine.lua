@@ -232,6 +232,43 @@ local function cellPos(r, row)
   return gridX0 + (r - 1) * cellW, gridY0 + (row - 1) * cellH
 end
 
+-- Gold grid lines between/around every reel box. CC:Tweaked's 16-color
+-- palette has no true "gold", so colors.yellow is used -- swap this for
+-- colors.orange if you want something a bit deeper/warmer.
+local GRID_LINE_COLOR = colors.yellow
+
+local function drawGridLines()
+  term.setBackgroundColor(GRID_LINE_COLOR)
+
+  -- a vertical gold line after every reel (including the far right edge)
+  for r = 1, REELS do
+    local lineX = gridX0 + r * cellW - 1
+    for yy = 0, gridHeight - 1 do
+      term.setCursorPos(lineX, gridY0 + yy)
+      term.write(" ")
+    end
+  end
+
+  -- a horizontal gold line after every row (including the bottom edge)
+  for row = 1, ROWS do
+    local lineY = gridY0 + row * cellH - 1
+    term.setCursorPos(gridX0, lineY)
+    term.write(string.rep(" ", gridWidth))
+  end
+
+  -- frame the left and top edges too, so the whole grid is boxed in
+  if gridX0 > 1 then
+    for yy = 0, gridHeight - 1 do
+      term.setCursorPos(gridX0 - 1, gridY0 + yy)
+      term.write(" ")
+    end
+  end
+  if gridY0 > 1 then
+    term.setCursorPos(math.max(1, gridX0 - 1), gridY0 - 1)
+    term.write(string.rep(" ", gridWidth + 1))
+  end
+end
+
 -- Fast, plain solid-color box -- used while reels are still fast-cycling
 -- during the spin animation (suit pixel art would be wasted detail there
 -- and would only slow the animation down).
@@ -357,6 +394,7 @@ local function drawFrame(message, msgColor)
   centerText(1, "== B U F F A L O   B O N U S ==", colors.orange)
   drawHud(message, msgColor)
   drawButtons()
+  drawGridLines()
   if currentGrid then
     for r = 1, REELS do
       for row = 1, ROWS do
