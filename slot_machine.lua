@@ -3,11 +3,13 @@
   Built for a 3x4 Advanced Monitor wall + one Computer.
 
   FEATURES
-   - 5 reels x 4 rows, "ways to win" scoring (like real reel-slot cabinets)
+   - 5 reels x 4 rows, real fixed-payline scoring (1-9 selectable lines,
+     each a specific zigzag row-pattern -- not a "ways" system)
    - WILD symbol substitutes for everything but the scatter
    - 3+ scatters trigger the BUFFALO BONUS free-spin round
    - Free spins have stacked wilds and a rising multiplier
    - Retriggers add more free spins mid-bonus
+   - BIG WIN! banner for any win over $25
    - Touch-screen buttons (Advanced Monitor) + keyboard fallback on the computer
 
   SETUP
@@ -123,23 +125,44 @@ local function drawBackground()
 end
 
 -- ============================= SYMBOLS =============================
--- pay = payout multiplier of (bet/10) per "way", by number of consecutive
--- reels (starting at reel 1) that contain the symbol (or a WILD).
--- These numbers were tuned via simulation (2,000,000 spins) so the whole
--- machine lands at ~98% RTP -- a ~2 cent hold per dollar wagered, same
--- ballpark as a real slot machine. (The old numbers paid out 5700%+ RTP
--- because wilds inflated every symbol's payout at once -- these fix that.)
+-- pay = payout multiplier of (bet-per-line/10), by number of consecutive
+-- reels (starting at reel 1) that match along a SINGLE payline (see
+-- LINE_PATTERNS below) -- a real fixed-payline system, not "ways". These
+-- numbers were tuned via a 2,000,000-spin simulation of that exact model
+-- so the whole machine lands at ~98% RTP (a ~2 cent hold per dollar
+-- wagered), matching a real slot machine.
 local SYM = {
   WILD = { label = "WILD", fg = c.black,     bg = c.yellow,    wild = true },
   SCAT = { label = "COIN", fg = c.white,     bg = c.orange,    scatter = true },
-  BUF  = { label = "BUFF", fg = c.white,     bg = c.brown,     pay = {[3]=0.09, [4]=0.43, [5]=2.57} },
-  EAG  = { label = "EAGL", fg = c.black,     bg = c.lightGray, pay = {[3]=0.07, [4]=0.26, [5]=1.28} },
-  WLF  = { label = "WOLF", fg = c.white,     bg = c.gray,      pay = {[3]=0.05, [4]=0.17, [5]=0.86} },
-  ELK  = { label = "ELK ", fg = c.black,     bg = c.lime,      pay = {[3]=0.03, [4]=0.14, [5]=0.69} },
-  A    = { label = " A  ", fg = c.red,       bg = c.white,     pay = {[3]=0.02, [4]=0.07, [5]=0.34} },
-  K    = { label = " K  ", fg = c.black,     bg = c.white,     pay = {[3]=0.02, [4]=0.05, [5]=0.26} },
-  Q    = { label = " Q  ", fg = c.red,       bg = c.white,     pay = {[3]=0.02, [4]=0.05, [5]=0.26} },
-  J    = { label = " J  ", fg = c.black,     bg = c.white,     pay = {[3]=0.02, [4]=0.03, [5]=0.17} },
+  BUF  = { label = "BUFF", fg = c.white,     bg = c.brown,     pay = {[3]=81.21,  [4]=406.07, [5]=2436.40} },
+  EAG  = { label = "EAGL", fg = c.black,     bg = c.lightGray, pay = {[3]=64.97,  [4]=243.64, [5]=1218.20} },
+  WLF  = { label = "WOLF", fg = c.white,     bg = c.gray,      pay = {[3]=48.73,  [4]=162.43, [5]=812.13} },
+  ELK  = { label = "ELK ", fg = c.black,     bg = c.lime,      pay = {[3]=32.49,  [4]=129.94, [5]=649.71} },
+  A    = { label = " A  ", fg = c.red,       bg = c.white,     pay = {[3]=16.24,  [4]=64.97,  [5]=324.85} },
+  K    = { label = " K  ", fg = c.black,     bg = c.white,     pay = {[3]=16.24,  [4]=48.73,  [5]=243.64} },
+  Q    = { label = " Q  ", fg = c.red,       bg = c.white,     pay = {[3]=16.24,  [4]=48.73,  [5]=243.64} },
+  J    = { label = " J  ", fg = c.black,     bg = c.white,     pay = {[3]=16.24,  [4]=32.49,  [5]=162.43} },
+}
+
+-- ============================= PAYLINES =============================
+-- 9 fixed lines, one row (1-4, top-to-bottom) per reel -- a real payline
+-- system like the reference image, not the old "ways" method. Only the
+-- first `linesPlayed` of these are active/checked each spin. Each line
+-- gets its own display color for the edge dash indicators.
+local LINE_PATTERNS = {
+  {2,2,2,2,2},
+  {3,3,3,3,3},
+  {1,1,1,1,1},
+  {4,4,4,4,4},
+  {1,2,3,2,1},
+  {4,3,2,3,4},
+  {2,1,2,1,2},
+  {3,4,3,4,3},
+  {1,4,1,4,1},
+}
+local LINE_COLORS = {
+  colors.red, colors.blue, colors.lime, colors.magenta, colors.orange,
+  colors.cyan, colors.pink, colors.purple, colors.white,
 }
 
 -- ============================= CARD SUIT ART =============================
@@ -201,9 +224,13 @@ local FONT_5x7 = {
   D = {"11110","10001","10001","10001","10001","10001","11110"},
   F = {"11111","10000","10000","11110","10000","10000","10000"},
   G = {"01111","10000","10000","10011","10001","10001","01111"},
+  I = {"11111","00100","00100","00100","00100","00100","11111"},
   L = {"10000","10000","10000","10000","10000","10000","11111"},
+  N = {"10001","11001","10101","10101","10011","10001","10001"},
   O = {"01110","10001","10001","10001","10001","10001","01110"},
   U = {"10001","10001","10001","10001","10001","10001","01110"},
+  W = {"10001","10001","10001","10101","10101","10101","01010"},
+  ["!"] = {"00100","00100","00100","00100","00100","00000","00100"},
 }
 
 -- Draws text using the big block font, centered horizontally, top edge
@@ -362,6 +389,11 @@ local function cellPos(r, row)
   return gridX0 + (r - 1) * cellW, gridY0 + (row - 1) * cellH
 end
 
+local function cellCenter(r, row)
+  local x, y = cellPos(r, row)
+  return x + math.floor((cellW - 1) / 2), y + math.floor((cellH - 2) / 2)
+end
+
 -- Gold grid lines between/around every reel box. CC:Tweaked's 16-color
 -- palette has no true "gold", so colors.yellow is used -- swap this for
 -- colors.orange if you want something a bit deeper/warmer.
@@ -396,6 +428,29 @@ local function drawGridLines()
   if gridY0 > 1 then
     term.setCursorPos(math.max(1, gridX0 - 1), gridY0 - 1)
     term.write(string.rep(" ", gridWidth + 1))
+  end
+end
+
+-- Dash markers just outside the grid's left/right edges, one per active
+-- line, at the row height where that line enters (left) and exits
+-- (right) the grid -- like the line-number markers in a real payline
+-- chart. Each line gets its own color from LINE_COLORS.
+local function drawLineIndicators()
+  local leftX = math.max(1, gridX0 - 3)
+  local rightX = math.min(w, gridX0 + gridWidth + 1)
+
+  for li = 1, linesPlayed do
+    local pattern = LINE_PATTERNS[li]
+    local color = LINE_COLORS[((li - 1) % #LINE_COLORS) + 1]
+    term.setBackgroundColor(color)
+
+    local _, leftY = cellCenter(1, pattern[1])
+    term.setCursorPos(leftX, leftY)
+    term.write("--")
+
+    local _, rightY = cellCenter(REELS, pattern[REELS])
+    term.setCursorPos(rightX, rightY)
+    term.write("--")
   end
 end
 
@@ -531,6 +586,7 @@ local function drawFrame(message, msgColor)
   drawHud(message, msgColor)
   drawButtons()
   drawGridLines()
+  drawLineIndicators()
   if currentGrid then
     for r = 1, REELS do
       for row = 1, ROWS do
@@ -552,11 +608,6 @@ end
 
 -- ============================= WIN LINES =============================
 local WIN_LINE_COLOR = colors.cyan
-
-local function cellCenter(r, row)
-  local x, y = cellPos(r, row)
-  return x + math.floor((cellW - 1) / 2), y + math.floor((cellH - 2) / 2)
-end
 
 -- simple Bresenham line between two character-grid points
 local function drawLineSeg(x1, y1, x2, y2, color)
@@ -635,51 +686,70 @@ local function bannerAnim(text, col, holdTime)
   sleep(holdTime or 1)
 end
 
+-- ============================= BIG WIN =============================
+local BIG_WIN_THRESHOLD = 25
+
+-- Unlike bannerAnim, this keeps the background image visible (drawn
+-- fresh every frame instead of clearing to black) behind the big text.
+local function showBigWinBanner()
+  local titleY = math.floor(h / 2) - 4
+  for frame = 1, 20 do
+    drawBackground()
+    drawBorderLights(frame, colors.yellow)
+    if frame >= 3 then
+      drawBigText("BIG WIN!", titleY, colors.orange)
+    end
+    sfx("minecraft:entity.player.levelup", 1, 1 + frame * 0.05)
+    sleep(0.1)
+  end
+end
+
 -- ============================= SCORING =============================
+-- Real fixed-payline evaluation: only the first `linesPlayed` lines in
+-- LINE_PATTERNS are checked. Each line follows one specific row per reel
+-- (not "any row" like a ways system), starting from reel 1, with WILD
+-- substituting for any symbol.
+--
 -- Returns (winAmount, hits, winLines):
 --  hits     -- [reel][row]=true for every cell that's part of ANY win,
 --              used for the white flash.
---  winLines -- one entry per winning symbol group, each with a path of
---              {r, row} points (one representative row per reel) so a
---              line can be drawn straight through the win.
-local function evaluateWays(grid)
+--  winLines -- one entry per winning line, with its exact path of
+--              {r, row} points so a line can be drawn through it.
+local function evaluateLines(grid)
   local total, hits, winLines = 0, {}, {}
-  for key, sym in pairs(SYM) do
-    if sym.pay then
-      local consecutive, waysMult = 0, 1
-      local path = {}
-      for r = 1, REELS do
-        local count = 0
-        local chosenRow = nil
-        for row = 1, ROWS do
-          local s = grid[r][row]
-          if s == key or SYM[s].wild then
-            count = count + 1
-            if not chosenRow then chosenRow = row end
-          end
-        end
-        if count > 0 then
-          consecutive = consecutive + 1
-          waysMult = waysMult * count
-          path[#path + 1] = { r = r, row = chosenRow }
-        else
-          break
-        end
+
+  for li = 1, linesPlayed do
+    local pattern = LINE_PATTERNS[li]
+    local path = {}
+    local key = nil
+    local consecutive = 0
+    for r = 1, REELS do
+      local row = pattern[r]
+      path[#path + 1] = { r = r, row = row }
+      local s = grid[r][row]
+      if not key and s ~= "WILD" then key = s end
+      if s == key or s == "WILD" then
+        consecutive = consecutive + 1
+      else
+        break
       end
-      if consecutive >= 3 and sym.pay[consecutive] then
-        local amount = sym.pay[consecutive] * waysMult * (totalBet() / 10)
+    end
+
+    if key and consecutive >= 3 then
+      local sym = SYM[key]
+      if sym and sym.pay and sym.pay[consecutive] then
+        local amount = sym.pay[consecutive] * (bet / 10)
         total = total + amount
-        for r = 1, consecutive do
-          hits[r] = hits[r] or {}
-          for row = 1, ROWS do
-            local s = grid[r][row]
-            if s == key or SYM[s].wild then hits[r][row] = true end
-          end
+        for i = 1, consecutive do
+          local p = path[i]
+          hits[p.r] = hits[p.r] or {}
+          hits[p.r][p.row] = true
         end
-        winLines[#winLines + 1] = { symbol = key, path = path }
+        winLines[#winLines + 1] = { line = li, symbol = key, path = { table.unpack(path, 1, consecutive) } }
       end
     end
   end
+
   -- round to the nearest cent (not the nearest whole credit) so the
   -- small, realistic paytable values above actually show up
   return math.floor(total * 100 + 0.5) / 100, hits, winLines
@@ -712,12 +782,18 @@ local function runBonus(triggerScatters)
     currentGrid = grid
     animateSpin(grid, bonusWeights)
 
-    local win, hits, winLines = evaluateWays(grid)
+    local win, hits, winLines = evaluateLines(grid)
     win = win * multiplier
     if win > 0 then
       bonusTotal = bonusTotal + win
       flashWin(grid, hits)
       drawWinLines(winLines)
+      if win > BIG_WIN_THRESHOLD then
+        showBigWinBanner()
+        drawFrame()
+        drawGrid(grid, hits)
+        drawWinLines(winLines)
+      end
       drawHud("YOU WIN $" .. money(win) .. "!", colors.lime)
     else
       drawHud("NO WIN THIS FREE SPIN", colors.red)
@@ -742,7 +818,8 @@ local spinning = false
 local function doSpin()
   if spinning then return end
   if credits < totalBet() then
-    drawHud("NOT ENOUGH CREDITS")
+    drawHud("NOT ENOUGH CREDITS", colors.red)
+    drawButtons()
     return
   end
   spinning = true
@@ -753,13 +830,19 @@ local function doSpin()
   currentGrid = grid
   animateSpin(grid, baseWeights)
 
-  local win, hits, winLines = evaluateWays(grid)
+  local win, hits, winLines = evaluateLines(grid)
   local scatters = countScatters(grid)
 
   if win > 0 then
     credits = credits + win
     flashWin(grid, hits)
     drawWinLines(winLines)
+    if win > BIG_WIN_THRESHOLD then
+      showBigWinBanner()
+      drawFrame()
+      drawGrid(grid, hits)
+      drawWinLines(winLines)
+    end
     drawHud("YOU WIN $" .. money(win) .. "!", colors.lime)
   else
     drawHud("NO WIN - TRY AGAIN", colors.red)
@@ -775,12 +858,12 @@ local function doSpin()
 end
 
 -- ============================= INPUT =============================
--- drawHud() alone clears the whole HUD strip (which includes the button
--- row), so every bet/lines change has to redraw the buttons afterward too
--- -- otherwise they vanish until the next full spin/frame redraw.
+-- A full drawFrame() redraw -- not just drawHud() -- because changing
+-- bet or lines also has to redraw the button row underneath the HUD
+-- text (or the buttons vanish) and the payline dash indicators (which
+-- change count when lines change).
 local function refreshControls()
-  drawHud()
-  drawButtons()
+  drawFrame()
 end
 
 local function changeBet(delta)
@@ -817,13 +900,24 @@ currentGrid = genGrid(baseWeights, nil)
 drawFrame()
 centerText(2, "TOUCH SPIN OR PRESS [SPACE]   BET +/- WITH KEYS", colors.lightGray)
 
+-- Debounce touches: some monitors/clients can fire monitor_touch more
+-- than once for what was physically a single tap, which made +LN/-BET
+-- etc. occasionally seem to jump by more than one step. Ignore repeats
+-- of the same button within a short window.
+local lastTouch, lastTouchTime = nil, 0
+local TOUCH_DEBOUNCE_MS = 250
+
 while true do
   local event, p1, p2, p3 = os.pullEvent()
   if event == "monitor_touch" then
     local x, y = p2, p3
     for _, b in ipairs(buttons) do
       if pointInButton(x, y, b) then
-        handleButton(b.action)
+        local now = os.epoch("utc")
+        if b.action ~= lastTouch or (now - lastTouchTime) > TOUCH_DEBOUNCE_MS then
+          lastTouch, lastTouchTime = b.action, now
+          handleButton(b.action)
+        end
         break
       end
     end
