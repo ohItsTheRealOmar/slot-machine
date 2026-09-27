@@ -60,7 +60,7 @@ end
 -- own coroutine (see musicLoop in the main loop) so it never blocks
 -- button input or the spin/bonus animations.
 local MUSIC_INSTRUMENT = "pling" -- try "bit" for a more 8-bit/chiptune tone
-local MUSIC_MIN_VOL, MUSIC_MAX_VOL, MUSIC_VOL_STEP = 0, 3, 0.5
+local MUSIC_MIN_VOL, MUSIC_MAX_VOL, MUSIC_VOL_STEP = 0, 3, 0.1
 local musicVolume = 1.5
 
 -- pitch is 0-24 (12 = middle); len/rest are seconds. This spells out
@@ -1349,4 +1349,3 @@ end
 -- just lets the other two loops (which never return on their own) keep
 -- running forever either way.
 parallel.waitForAll(inputLoop, animationLoop, musicLoop)
-
