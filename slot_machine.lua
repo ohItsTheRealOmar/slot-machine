@@ -454,13 +454,28 @@ local function drawLineIndicators()
   end
 end
 
+-- ============================= RAINBOW WILDS =============================
+-- WILD symbols cycle through this color sequence instead of a flat yellow.
+-- rainbowTick advances once per idle animation frame (see IDLE ANIMATION
+-- below); offsetting by reel number (r) makes the colors sweep across the
+-- grid left-to-right rather than all flashing in lockstep.
+local RAINBOW_COLORS = {
+  colors.red, colors.orange, colors.yellow, colors.lime,
+  colors.cyan, colors.lightBlue, colors.purple, colors.magenta, colors.pink,
+}
+local rainbowTick = 0
+
+local function wildBg(r)
+  return RAINBOW_COLORS[((r + rainbowTick) % #RAINBOW_COLORS) + 1]
+end
+
 -- Fast, plain solid-color box -- used while reels are still fast-cycling
 -- during the spin animation (suit pixel art would be wasted detail there
 -- and would only slow the animation down).
 local function drawCellFast(r, row, key)
   local sym = SYM[key]
   local x, y = cellPos(r, row)
-  term.setBackgroundColor(sym.bg)
+  term.setBackgroundColor(sym.wild and wildBg(r) or sym.bg)
   term.setTextColor(sym.fg)
   for yy = 0, cellH - 2 do
     term.setCursorPos(x, y + yy)
@@ -604,6 +619,101 @@ local function drawGrid(grid, highlights)
       drawCell(r, row, grid[r][row], hl)
     end
   end
+end
+
+-- Cheap redraw of just the WILD cells -- used every idle animation frame
+-- so the rainbow cycle updates without repainting the whole grid.
+local function redrawWildCells(grid)
+  if not grid then return end
+  for r = 1, REELS do
+    for row = 1, ROWS do
+      if grid[r][row] == "WILD" then
+        drawCellFast(r, row, "WILD")
+      end
+    end
+  end
+end
+
+-- ============================= BUFFALO HERD =============================
+-- A little 16-bit-style running buffalo, drawn as blocky pixel art (same
+-- idea as the card-suit bitmaps above) in whatever blank space is left
+-- around the reels once REEL_SCALE has shrunk them. Two frames, legs
+-- alternating, give it a galloping look; several are staggered so a small
+-- "herd" streams across at once. Purely cosmetic -- it never covers the
+-- reels themselves.
+local BUFFALO_FRAME_A = {
+  "...11111...",
+  "..1111111..",
+  "11111111111",
+  "..1.1..1.1.",
+}
+local BUFFALO_FRAME_B = {
+  "...11111...",
+  "..1111111..",
+  "11111111111",
+  ".1.1..1.1..",
+}
+local BUFFALO_FRAMES = { BUFFALO_FRAME_A, BUFFALO_FRAME_B }
+local BUFFALO_COLOR = colors.brown
+
+-- Use whatever blank strip sits below the (shrunk) reel grid but above the
+-- HUD. If the monitor is too small/dense for that to fit a sprite, the
+-- herd just quietly disables itself and only the rainbow wilds animate.
+local herdBandY0 = gridY0 + gridHeight
+local herdBandH = (topY + reelAreaH) - herdBandY0
+local HERD_ENABLED = herdBandH >= 4 and bgImage == nil
+local HERD_COUNT = 3
+local herdTick = 0
+
+local function clearHerdBand()
+  term.setBackgroundColor(colors.black)
+  for yy = 0, herdBandH - 1 do
+    term.setCursorPos(1, herdBandY0 + yy)
+    term.write(string.rep(" ", w))
+  end
+end
+
+local function drawBuffaloAt(x0, frame)
+  local spriteH = #frame
+  local spriteW = #frame[1]
+  local y0 = herdBandY0 + math.floor(math.max(0, herdBandH - spriteH) / 2)
+  term.setBackgroundColor(BUFFALO_COLOR)
+  for py = 1, spriteH do
+    local rowStr = frame[py]
+    for px = 1, spriteW do
+      if rowStr:sub(px, px) == "1" then
+        local sx = x0 + px - 1
+        if sx >= 1 and sx <= w then
+          term.setCursorPos(sx, y0 + py - 1)
+          term.write(" ")
+        end
+      end
+    end
+  end
+end
+
+local function drawHerd()
+  if not HERD_ENABLED then return end
+  clearHerdBand()
+  local frame = BUFFALO_FRAMES[(math.floor(herdTick / 3) % #BUFFALO_FRAMES) + 1]
+  local spriteW = #frame[1]
+  local spacing = spriteW + 16
+  for i = 0, HERD_COUNT - 1 do
+    local x = ((herdTick + i * spacing) % (w + spriteW)) - spriteW
+    drawBuffaloAt(x, frame)
+  end
+end
+
+-- ============================= IDLE ANIMATION =============================
+-- Runs once per animation timer tick (see main loop) whenever the machine
+-- isn't mid-spin/mid-bonus: advances the rainbow-wild cycle and the herd,
+-- and repaints only those small pieces (never the whole frame), so it's
+-- cheap enough to run continuously without slowing the buttons down.
+local function idleTick()
+  rainbowTick = rainbowTick + 1
+  redrawWildCells(currentGrid)
+  herdTick = herdTick + 1
+  drawHerd()
 end
 
 -- ============================= WIN LINES =============================
@@ -907,9 +1017,18 @@ centerText(2, "TOUCH SPIN OR PRESS [SPACE]   BET +/- WITH KEYS", colors.lightGra
 local lastTouch, lastTouchTime = nil, 0
 local TOUCH_DEBOUNCE_MS = 250
 
+-- Idle animation heartbeat -- rainbow wilds + the buffalo herd. Only ticks
+-- while nothing else is going on (spinning is false between spins), so it
+-- never fights with the spin/bonus animations for the screen.
+local ANIM_INTERVAL = 0.15
+local animTimer = os.startTimer(ANIM_INTERVAL)
+
 while true do
   local event, p1, p2, p3 = os.pullEvent()
-  if event == "monitor_touch" then
+  if event == "timer" and p1 == animTimer then
+    if not spinning then idleTick() end
+    animTimer = os.startTimer(ANIM_INTERVAL)
+  elseif event == "monitor_touch" then
     local x, y = p2, p3
     for _, b in ipairs(buttons) do
       if pointInButton(x, y, b) then
