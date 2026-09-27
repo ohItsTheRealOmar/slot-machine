@@ -31,7 +31,7 @@ local monW, monH = mon.getSize()
 -- 1.0   = fills the whole monitor (default)
 -- 0.5   = half size, centered, black around it
 -- 1.5   = 150% size, centered, edges get cropped off-screen
-local IMG_SCALE = .10
+local IMG_SCALE = 0.50
 
 local IMG_PATH = "bg.nfp"
 if not fs.exists(IMG_PATH) then
