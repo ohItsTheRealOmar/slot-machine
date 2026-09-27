@@ -24,7 +24,7 @@ if not bestMon then
 end
 
 local mon = bestMon
-mon.setTextScale(0.5)
+mon.setTextScale(0.1)
 local monW, monH = mon.getSize()
 
 local IMG_PATH = "bg.nfp"
