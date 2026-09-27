@@ -196,16 +196,14 @@ local FONT_5x7 = {
   U = {"10001","10001","10001","10001","10001","10001","01110"},
 }
 
--- how big each font "pixel" is drawn, in real character cells. Monitor
--- characters are taller than they are wide, so pixels are wider than
--- tall to make letters look roughly square. Tweak these to resize.
-local BIGTEXT_PIXEL_W = 2
-local BIGTEXT_PIXEL_H = 1
-
 -- Draws text using the big block font, centered horizontally, top edge
 -- at topY. Only lit pixels are drawn (unlit pixels are left alone), so
--- it layers cleanly over a background image or solid color.
-local function drawBigText(text, topY, color)
+-- it layers cleanly over a background image or solid color. The pixel
+-- size is picked automatically so the text always fits the monitor's
+-- actual width, however big or small that turns out to be. Returns the
+-- total height (in rows) the text used, so callers can stack lines.
+local function drawBigText(text, topY, color, maxWidthChars)
+  maxWidthChars = maxWidthChars or w
   local letterGap = 1 -- gap columns between letters, in font pixels
   local spaceWidth = 3 -- width of a literal space, in font pixels
 
@@ -214,14 +212,18 @@ local function drawBigText(text, topY, color)
     local ch = text:sub(i, i)
     totalPixelCols = totalPixelCols + (ch == " " and spaceWidth or (5 + letterGap))
   end
-  local totalWidthChars = totalPixelCols * BIGTEXT_PIXEL_W
+  if totalPixelCols <= 0 then return 0 end
+
+  local pixelW = math.max(1, math.floor(maxWidthChars / totalPixelCols))
+  local pixelH = math.max(1, pixelW) -- square-ish blocks; big and bold either way
+  local totalWidthChars = totalPixelCols * pixelW
   local curX = math.max(1, math.floor((w - totalWidthChars) / 2) + 1)
 
   term.setBackgroundColor(color)
   for i = 1, #text do
     local ch = text:sub(i, i)
     if ch == " " then
-      curX = curX + spaceWidth * BIGTEXT_PIXEL_W
+      curX = curX + spaceWidth * pixelW
     else
       local glyph = FONT_5x7[ch]
       if glyph then
@@ -229,9 +231,9 @@ local function drawBigText(text, topY, color)
           local rowStr = glyph[gy]
           for gx = 1, 5 do
             if rowStr:sub(gx, gx) == "1" then
-              for py = 0, BIGTEXT_PIXEL_H - 1 do
-                for px = 0, BIGTEXT_PIXEL_W - 1 do
-                  term.setCursorPos(curX + (gx - 1) * BIGTEXT_PIXEL_W + px, topY + (gy - 1) * BIGTEXT_PIXEL_H + py)
+              for py = 0, pixelH - 1 do
+                for px = 0, pixelW - 1 do
+                  term.setCursorPos(curX + (gx - 1) * pixelW + px, topY + (gy - 1) * pixelH + py)
                   term.write(" ")
                 end
               end
@@ -239,9 +241,11 @@ local function drawBigText(text, topY, color)
           end
         end
       end
-      curX = curX + (5 + letterGap) * BIGTEXT_PIXEL_W
+      curX = curX + (5 + letterGap) * pixelW
     end
   end
+
+  return 7 * pixelH
 end
 
 -- ============================= START SCREEN =============================
@@ -276,14 +280,15 @@ local function showStartScreen()
 
   -- kick off the jingle in parallel with the light/title animation
   parallel.waitForAny(playStartupJingle, function()
-    local titleY = math.floor(h / 2) - 5
+    local titleY = math.floor(h / 2) - 8
+    local buffaloH = 0
     for frame = 1, 40 do
       drawBorderLights(frame, colors.yellow)
       if frame == 6 then
-        drawBigText("BUFFALO", titleY, colors.yellow)
+        buffaloH = drawBigText("BUFFALO", titleY, colors.yellow)
       end
       if frame == 14 then
-        drawBigText("GOLD", titleY + 9, colors.orange)
+        drawBigText("GOLD", titleY + buffaloH + 2, colors.orange)
       end
       sleep(0.1)
     end
