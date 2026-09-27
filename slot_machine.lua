@@ -40,6 +40,29 @@ local credits = 1000
 local bet = 10
 local betStep = 5
 local minBet, maxBet = 5, 200
+local currentGrid = nil -- last grid shown; drawFrame always redraws this so the screen never goes blank
+
+-- ============================= BACKGROUND IMAGE =============================
+-- Optional: drop an .nfp image (CC:Tweaked's "paint" format) next to this
+-- script and it will be used as the background behind the reels/HUD.
+--   * Make one in-game: run `paint bg.nfp` on the computer and draw it, or
+--   * Convert a picture with an online "image to nfp" converter, then
+--     wget its raw URL to bg.nfp on this computer, same as this script.
+-- Change BG_IMAGE_PATH below if you name the file something else.
+local BG_IMAGE_PATH = "bg.nfp"
+local bgImage = nil
+if fs.exists(BG_IMAGE_PATH) then
+  local ok, img = pcall(paintutils.loadImage, BG_IMAGE_PATH)
+  if ok then bgImage = img end
+end
+
+local function drawBackground()
+  term.setBackgroundColor(colors.black)
+  term.clear()
+  if bgImage then
+    pcall(paintutils.drawImage, bgImage, 1, 1)
+  end
+end
 
 -- ============================= SYMBOLS =============================
 -- pay = payout multiplier of (bet/10) per "way", by number of consecutive
@@ -128,7 +151,7 @@ local function addButton(label, x1, y1, x2, action)
   table.insert(buttons, { label = label, x1 = x1, y1 = y1, x2 = x2, y2 = y1, action = action })
 end
 
-local function drawHud(message)
+local function drawHud(message, msgColor)
   term.setBackgroundColor(colors.black)
   for yy = h - hudH, h do
     term.setCursorPos(1, yy)
@@ -138,7 +161,7 @@ local function drawHud(message)
   term.setCursorPos(2, h - hudH)
   term.write("CREDITS: " .. credits .. "    BET: " .. bet)
   if message then
-    term.setTextColor(colors.yellow)
+    term.setTextColor(msgColor or colors.yellow)
     term.setCursorPos(2, h - hudH + 1)
     term.write(message)
   end
@@ -164,12 +187,18 @@ local function drawButtons()
   term.setBackgroundColor(colors.black)
 end
 
-local function drawFrame(message)
-  term.setBackgroundColor(colors.black)
-  term.clear()
+local function drawFrame(message, msgColor)
+  drawBackground()
   centerText(1, "== B U F F A L O   B O N U S ==", colors.orange)
-  drawHud(message)
+  drawHud(message, msgColor)
   drawButtons()
+  if currentGrid then
+    for r = 1, REELS do
+      for row = 1, ROWS do
+        drawCell(r, row, currentGrid[r][row])
+      end
+    end
+  end
 end
 
 local function drawGrid(grid, highlights)
@@ -287,6 +316,7 @@ local function runBonus(triggerScatters)
     centerText(2, "FREE SPINS LEFT: " .. (freeSpins + 1) .. "   MULT x" .. multiplier, colors.lime)
 
     local grid = genGrid(bonusWeights, 20) -- 20% chance any reel is fully wild
+    currentGrid = grid
     animateSpin(grid, bonusWeights)
 
     local win, hits = evaluateWays(grid)
@@ -294,9 +324,11 @@ local function runBonus(triggerScatters)
     if win > 0 then
       bonusTotal = bonusTotal + win
       flashWin(grid, hits)
-      drawHud("BONUS WIN: " .. win)
-      sleep(0.6)
+      drawHud("YOU WIN " .. win .. "!", colors.lime)
+    else
+      drawHud("NO WIN THIS FREE SPIN", colors.red)
     end
+    sleep(1.2)
 
     local sc = countScatters(grid)
     if sc >= 3 then
@@ -324,6 +356,7 @@ local function doSpin()
   drawFrame()
 
   local grid = genGrid(baseWeights, nil)
+  currentGrid = grid
   animateSpin(grid, baseWeights)
 
   local win, hits = evaluateWays(grid)
@@ -332,9 +365,11 @@ local function doSpin()
   if win > 0 then
     credits = credits + win
     flashWin(grid, hits)
-    drawHud("WIN: " .. win .. "!")
-    sleep(0.6)
+    drawHud("YOU WIN " .. win .. "!", colors.lime)
+  else
+    drawHud("NO WIN - TRY AGAIN", colors.red)
   end
+  sleep(1.5)
 
   if scatters >= 3 then
     runBonus(scatters)
@@ -363,10 +398,9 @@ local function pointInButton(x, y, b)
 end
 
 -- ============================= BOOT =============================
+currentGrid = genGrid(baseWeights, nil)
 drawFrame()
 centerText(2, "TOUCH SPIN OR PRESS [SPACE]   BET +/- WITH KEYS", colors.lightGray)
-local idleGrid = genGrid(baseWeights, nil)
-drawGrid(idleGrid)
 
 while true do
   local event, p1, p2, p3 = os.pullEvent()
