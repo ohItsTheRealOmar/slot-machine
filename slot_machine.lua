@@ -1,336 +1,388 @@
--- ===============================================
---  CC: Tweaked Slot Machine
---  3x3 grid slot machine with denominations,
---  paylines, and per-symbol multipliers.
--- ===============================================
+--[[
+  BUFFALO BONUS - a CC:Tweaked slot machine
+  Built for a 3x4 Advanced Monitor wall + one Computer.
 
-local BALANCE_FILE = "slot_balance.txt"
+  FEATURES
+   - 5 reels x 4 rows, "ways to win" scoring (like real reel-slot cabinets)
+   - WILD symbol substitutes for everything but the scatter
+   - 3+ scatters trigger the BUFFALO BONUS free-spin round
+   - Free spins have stacked wilds and a rising multiplier
+   - Retriggers add more free spins mid-bonus
+   - Touch-screen buttons (Advanced Monitor) + keyboard fallback on the computer
 
-local SYMBOLS = {
-  { name = "SEVEN",   weight = 3,  mult = 50, color = colors.red },
-  { name = "DIAMOND", weight = 7,  mult = 25, color = colors.lightBlue },
-  { name = "BELL",    weight = 15, mult = 15, color = colors.yellow },
-  { name = "BAR",     weight = 20, mult = 10, color = colors.orange },
-  { name = "CLOVER",  weight = 25, mult = 5,  color = colors.green },
-  { name = "CHERRY",  weight = 30, mult = 3,  color = colors.pink },
+  SETUP
+   1. Place a 3x4 wall of Advanced Monitors (3 wide, 4 tall).
+   2. Place a Computer (Advanced Computer for color) touching the monitor wall.
+   3. Optionally place a Speaker next to the computer for sound.
+   4. On the computer: wget the raw URL of this file, then run it.
+--]]
+
+-- ============================= SETUP =============================
+local mon = peripheral.find("monitor")
+if not mon then
+  error("No monitor found! Attach the 3x4 monitor wall to this computer.")
+end
+mon.setTextScale(0.5)
+term.redirect(mon)
+local w, h = term.getSize()
+
+local speaker = peripheral.find("speaker")
+local function sfx(name, vol, pitch)
+  if speaker then pcall(speaker.playSound, name, vol or 1, pitch or 1) end
+end
+
+math.randomseed(os.epoch("utc"))
+
+local c = colors
+
+-- ============================= STATE =============================
+local credits = 1000
+local bet = 10
+local betStep = 5
+local minBet, maxBet = 5, 200
+
+-- ============================= SYMBOLS =============================
+-- pay = payout multiplier of (bet/10) per "way", by number of consecutive
+-- reels (starting at reel 1) that contain the symbol (or a WILD).
+local SYM = {
+  WILD = { label = "WILD", fg = c.black,     bg = c.yellow,    wild = true },
+  SCAT = { label = "COIN", fg = c.white,     bg = c.orange,    scatter = true },
+  BUF  = { label = "BUFF", fg = c.white,     bg = c.brown,     pay = {[3]=5, [4]=25, [5]=150} },
+  EAG  = { label = "EAGL", fg = c.black,     bg = c.lightGray, pay = {[3]=4, [4]=15, [5]=75} },
+  WLF  = { label = "WOLF", fg = c.white,     bg = c.gray,      pay = {[3]=3, [4]=10, [5]=50} },
+  ELK  = { label = "ELK ", fg = c.black,     bg = c.lime,      pay = {[3]=2, [4]=8,  [5]=40} },
+  A    = { label = " A  ", fg = c.white,     bg = c.red,       pay = {[3]=1, [4]=4,  [5]=20} },
+  K    = { label = " K  ", fg = c.white,     bg = c.blue,      pay = {[3]=1, [4]=3,  [5]=15} },
+  Q    = { label = " Q  ", fg = c.white,     bg = c.purple,    pay = {[3]=1, [4]=3,  [5]=15} },
+  J    = { label = " J  ", fg = c.black,     bg = c.green,     pay = {[3]=1, [4]=2,  [5]=10} },
 }
 
-local DENOMS = { 0.01, 0.05, 0.10, 0.25, 0.50, 1.00 }
+local baseWeights  = { WILD=2, SCAT=2, BUF=4, EAG=5, WLF=6, ELK=7, A=9, K=9, Q=9, J=9 }
+local bonusWeights = { WILD=6, SCAT=1, BUF=5, EAG=5, WLF=6, ELK=6, A=8, K=8, Q=8, J=8 }
+local scatterSpins = { [3]=8, [4]=15, [5]=20 }
 
--- Paylines: each is a list of {row, col} across the 3x3 grid
-local PAYLINES = {
-  { name = "Top Row",     cells = {{1,1},{1,2},{1,3}} },
-  { name = "Middle Row",  cells = {{2,1},{2,2},{2,3}} },
-  { name = "Bottom Row",  cells = {{3,1},{3,2},{3,3}} },
-  { name = "Diagonal \\", cells = {{1,1},{2,2},{3,3}} },
-  { name = "Diagonal /",  cells = {{3,1},{2,2},{1,3}} },
-}
+local REELS, ROWS = 5, 4
 
-local state = {
-  balance = 100.00,
-  denomIndex = 1,
-  lines = 1,
-  grid = {},       -- 3x3 of symbol tables
-  results = {},    -- list of strings from last spin
-  lastWin = 0,
-}
-
--- ---------- persistence ----------
-
-local function loadBalance()
-  if fs.exists(BALANCE_FILE) then
-    local f = fs.open(BALANCE_FILE, "r")
-    local v = tonumber(f.readAll())
-    f.close()
-    if v then state.balance = v end
+local function buildStrip(weights)
+  local strip = {}
+  for key, count in pairs(weights) do
+    for _ = 1, count do strip[#strip+1] = key end
   end
+  return strip
 end
 
-local function saveBalance()
-  local f = fs.open(BALANCE_FILE, "w")
-  f.write(tostring(state.balance))
-  f.close()
+local function pickSymbol(strip)
+  return strip[math.random(#strip)]
 end
 
--- ---------- game logic ----------
-
-local function totalWeight()
-  local t = 0
-  for _, s in ipairs(SYMBOLS) do t = t + s.weight end
-  return t
-end
-
-local function pickSymbol()
-  local r = math.random(1, totalWeight())
-  local cum = 0
-  for _, s in ipairs(SYMBOLS) do
-    cum = cum + s.weight
-    if r <= cum then return s end
-  end
-  return SYMBOLS[#SYMBOLS]
-end
-
-local function spinGrid()
-  local g = {}
-  for row = 1, 3 do
-    g[row] = {}
-    for col = 1, 3 do
-      g[row][col] = pickSymbol()
+local function genGrid(weights, stackChance)
+  local strip = buildStrip(weights)
+  local grid = {}
+  for r = 1, REELS do
+    grid[r] = {}
+    local forceWild = stackChance and math.random(1, 100) <= stackChance
+    for row = 1, ROWS do
+      grid[r][row] = forceWild and "WILD" or pickSymbol(strip)
     end
   end
-  return g
+  return grid
 end
 
-local function denom()
-  return DENOMS[state.denomIndex]
+-- ============================= LAYOUT =============================
+local marginX, topY = 2, 3
+local hudH = 3
+local reelAreaW = w - marginX * 2
+local reelAreaH = h - topY - hudH - 1
+local cellW = math.floor(reelAreaW / REELS)
+local cellH = math.max(2, math.floor(reelAreaH / ROWS))
+local gridX0, gridY0 = marginX, topY
+
+local function cellPos(r, row)
+  return gridX0 + (r - 1) * cellW, gridY0 + (row - 1) * cellH
 end
 
-local function totalBet()
-  return denom() * state.lines
-end
-
-local function evaluateSpin()
-  local results = {}
-  local totalWin = 0
-  for i = 1, state.lines do
-    local line = PAYLINES[i]
-    local s1 = state.grid[line.cells[1][1]][line.cells[1][2]]
-    local s2 = state.grid[line.cells[2][1]][line.cells[2][2]]
-    local s3 = state.grid[line.cells[3][1]][line.cells[3][2]]
-    if s1.name == s2.name and s2.name == s3.name then
-      local win = denom() * s1.mult
-      totalWin = totalWin + win
-      table.insert(results, string.format(
-        "%s: %s x3 -> WIN %.2f (x%d)", line.name, s1.name, win, s1.mult))
-    end
+local function drawCell(r, row, key, invert)
+  local sym = SYM[key]
+  local x, y = cellPos(r, row)
+  term.setBackgroundColor(invert and colors.white or sym.bg)
+  term.setTextColor(invert and colors.black or sym.fg)
+  for yy = 0, cellH - 2 do
+    term.setCursorPos(x, y + yy)
+    term.write(string.rep(" ", math.max(1, cellW - 1)))
   end
-  return results, totalWin
+  local lbl = sym.label
+  term.setCursorPos(x + math.max(0, math.floor((cellW - 1 - #lbl) / 2)), y + math.floor((cellH - 2) / 2))
+  term.write(lbl)
 end
 
--- ---------- monitor setup ----------
-
--- If a monitor is attached (directly adjacent, or via wired modem), draw the
--- game on it instead of the computer's own screen. You still control the
--- game by typing on the computer itself; the monitor just mirrors the display.
-local monitor = peripheral.find("monitor")
-if monitor then
-  monitor.setTextScale(0.5) -- finer resolution so a multi-block monitor has room for the grid + buttons; try 1 for bigger, chunkier text
-  term.redirect(monitor)
-end
-
--- ---------- rendering ----------
-
-local W, H = term.getSize()
-
-local function centerText(y, text, color)
-  term.setCursorPos(math.floor((W - #text) / 2) + 1, y)
-  term.setTextColor(color or colors.white)
+local function centerText(y, text, fg)
+  term.setTextColor(fg or colors.white)
+  term.setBackgroundColor(colors.black)
+  local x = math.max(1, math.floor((w - #text) / 2) + 1)
+  term.setCursorPos(x, y)
   term.write(text)
 end
 
-local CELL_W, CELL_H = 9, 3
-local GRID_X = math.floor((W - (CELL_W * 3 + 2)) / 2) + 1
-local GRID_Y = 5
-
-local function drawCell(x, y, symbol)
-  term.setBackgroundColor(symbol.color)
-  term.setTextColor(colors.black)
-  for row = 0, CELL_H - 1 do
-    term.setCursorPos(x, y + row)
-    if row == 1 then
-      local text = symbol.name
-      if #text > CELL_W then text = text:sub(1, CELL_W) end
-      local pad = math.floor((CELL_W - #text) / 2)
-      term.write(string.rep(" ", pad) .. text .. string.rep(" ", CELL_W - pad - #text))
-    else
-      term.write(string.rep(" ", CELL_W))
-    end
-  end
-  term.setBackgroundColor(colors.black)
-  term.setTextColor(colors.white)
-end
-
-local function drawGrid()
-  for row = 1, 3 do
-    for col = 1, 3 do
-      local x = GRID_X + (col - 1) * (CELL_W + 1)
-      local y = GRID_Y + (row - 1) * (CELL_H + 1)
-      drawCell(x, y, state.grid[row][col])
-    end
-  end
-end
-
--- ---------- touch buttons ----------
--- Buttons are hit-tested against monitor_touch x/y (character-cell coords,
--- same coordinate space as term.setCursorPos on the redirected monitor).
-
 local buttons = {}
+local function addButton(label, x1, y1, x2, action)
+  table.insert(buttons, { label = label, x1 = x1, y1 = y1, x2 = x2, y2 = y1, action = action })
+end
 
-local function setupButtons()
-  local btnH = 3
-  local y1 = H - btnH + 1
-  local y2 = H
-
-  buttons = {
-    { label = "DENOM -", x1 = 2,      x2 = 10,     action = "denomDown" },
-    { label = "DENOM +", x1 = 12,     x2 = 20,     action = "denomUp" },
-    { label = "LINES -", x1 = W - 19, x2 = W - 11, action = "linesDown" },
-    { label = "LINES +", x1 = W - 9,  x2 = W - 1,  action = "linesUp" },
-  }
-
-  local spinW = 14
-  local spinX1 = math.floor((W - spinW) / 2) + 1
-  table.insert(buttons, { label = "SPIN", x1 = spinX1, x2 = spinX1 + spinW - 1, action = "spin" })
-
-  for _, b in ipairs(buttons) do
-    b.y1 = y1
-    b.y2 = y2
+local function drawHud(message)
+  term.setBackgroundColor(colors.black)
+  for yy = h - hudH, h do
+    term.setCursorPos(1, yy)
+    term.write(string.rep(" ", w))
+  end
+  term.setTextColor(colors.white)
+  term.setCursorPos(2, h - hudH)
+  term.write("CREDITS: " .. credits .. "    BET: " .. bet)
+  if message then
+    term.setTextColor(colors.yellow)
+    term.setCursorPos(2, h - hudH + 1)
+    term.write(message)
   end
 end
 
 local function drawButtons()
-  for _, b in ipairs(buttons) do
-    local bg = (b.action == "spin") and colors.lime or colors.gray
-    term.setBackgroundColor(bg)
+  buttons = {}
+  local by = h
+  local specs = {
+    { "-BET", 2 },
+    { "+BET", 9 },
+    { "MAXBET", 16 },
+    { "SPIN!", w - 8 },
+  }
+  for _, s in ipairs(specs) do
+    local label, x = s[1], s[2]
+    term.setBackgroundColor(colors.lightBlue)
     term.setTextColor(colors.black)
-    local w = b.x2 - b.x1 + 1
-    for y = b.y1, b.y2 do
-      term.setCursorPos(b.x1, y)
-      if y == math.floor((b.y1 + b.y2) / 2) then
-        local pad = math.floor((w - #b.label) / 2)
-        term.write(string.rep(" ", pad) .. b.label .. string.rep(" ", w - pad - #b.label))
-      else
-        term.write(string.rep(" ", w))
-      end
-    end
+    term.setCursorPos(x, by)
+    term.write(" " .. label .. " ")
+    addButton(label, x, by, x + #label + 1, label)
   end
   term.setBackgroundColor(colors.black)
-  term.setTextColor(colors.white)
 end
 
-local function hitTest(x, y)
-  for _, b in ipairs(buttons) do
-    if x >= b.x1 and x <= b.x2 and y >= b.y1 and y <= b.y2 then
-      return b.action
-    end
-  end
-  return nil
-end
-
-local function draw()
+local function drawFrame(message)
   term.setBackgroundColor(colors.black)
   term.clear()
-  centerText(1, "=== SLOT MACHINE ===", colors.lime)
-  centerText(2, string.format("Balance: %.2f", state.balance), colors.white)
-  centerText(3, string.format("Denomination: %.2f   Lines: %d/%d   Bet: %.2f",
-    denom(), state.lines, #PAYLINES, totalBet()), colors.lightGray)
-
-  drawGrid()
-
-  local resultY = GRID_Y + 3 * (CELL_H + 1) + 1
-  if #state.results == 0 then
-    term.setCursorPos(2, resultY)
-    term.setTextColor(colors.gray)
-    term.write("Tap SPIN to play")
-  else
-    for i, line in ipairs(state.results) do
-      term.setCursorPos(2, resultY + i - 1)
-      term.setTextColor(colors.yellow)
-      term.write(line)
-    end
-    term.setCursorPos(2, resultY + #state.results + 1)
-    if state.lastWin > 0 then
-      term.setTextColor(colors.lime)
-      term.write(string.format("Total win: %.2f", state.lastWin))
-    else
-      term.setTextColor(colors.red)
-      term.write("No win this spin.")
-    end
-  end
-
+  centerText(1, "== B U F F A L O   B O N U S ==", colors.orange)
+  drawHud(message)
   drawButtons()
 end
 
--- ---------- input / main loop ----------
-
-local function changeDenom(dir)
-  state.denomIndex = state.denomIndex + dir
-  if state.denomIndex < 1 then state.denomIndex = 1 end
-  if state.denomIndex > #DENOMS then state.denomIndex = #DENOMS end
-end
-
-local function changeLines(dir)
-  state.lines = state.lines + dir
-  if state.lines < 1 then state.lines = 1 end
-  if state.lines > #PAYLINES then state.lines = #PAYLINES end
-end
-
-local function doSpin()
-  local bet = totalBet()
-  if state.balance < bet then
-    state.results = { "Not enough balance for this bet!" }
-    state.lastWin = 0
-    return
-  end
-  state.balance = state.balance - bet
-  state.grid = spinGrid()
-  local results, win = evaluateSpin()
-  state.balance = state.balance + win
-  state.results = results
-  state.lastWin = win
-  saveBalance()
-end
-
-local function handleAction(action)
-  if action == "spin" then
-    doSpin()
-  elseif action == "denomUp" then
-    changeDenom(1)
-  elseif action == "denomDown" then
-    changeDenom(-1)
-  elseif action == "linesUp" then
-    changeLines(1)
-  elseif action == "linesDown" then
-    changeLines(-1)
-  end
-end
-
-local function main()
-  math.randomseed(os.epoch("utc"))
-  loadBalance()
-  state.grid = spinGrid()
-  setupButtons()
-
-  while true do
-    draw()
-    local event, a, b, c = os.pullEvent()
-
-    if event == "monitor_touch" then
-      -- a = side, b = x, c = y
-      handleAction(hitTest(b, c))
-
-    elseif event == "key" then
-      local key = a
-      if key == keys.left then
-        changeDenom(-1)
-      elseif key == keys.right then
-        changeDenom(1)
-      elseif key == keys.up then
-        changeLines(1)
-      elseif key == keys.down then
-        changeLines(-1)
-      elseif key == keys.space or key == keys.enter then
-        doSpin()
-      elseif key == keys.q then
-        term.setBackgroundColor(colors.black)
-        term.clear()
-        term.setCursorPos(1, 1)
-        saveBalance()
-        print("Thanks for playing! Balance saved: " .. string.format("%.2f", state.balance))
-        return
-      end
+local function drawGrid(grid, highlights)
+  highlights = highlights or {}
+  for r = 1, REELS do
+    for row = 1, ROWS do
+      local hl = highlights[r] and highlights[r][row]
+      drawCell(r, row, grid[r][row], hl)
     end
   end
 end
 
-main()
+-- ============================= ANIMATION =============================
+local function animateSpin(finalGrid, weights)
+  local strip = buildStrip(weights)
+  local totalFrames = 22
+  for frame = 1, totalFrames do
+    for r = 1, REELS do
+      local stopFrame = totalFrames - (REELS - r) * 3
+      if frame < stopFrame then
+        for row = 1, ROWS do drawCell(r, row, pickSymbol(strip)) end
+      else
+        for row = 1, ROWS do drawCell(r, row, finalGrid[r][row]) end
+      end
+    end
+    sfx("minecraft:block.note_block.hat", 1, 1 + frame * 0.03)
+    sleep(0.05)
+  end
+  drawGrid(finalGrid)
+end
+
+local function flashWin(grid, hitReels)
+  for i = 1, 4 do
+    drawGrid(grid, hitReels)
+    sfx("minecraft:entity.experience_orb.pickup", 1, 1)
+    sleep(0.18)
+    drawGrid(grid)
+    sleep(0.12)
+  end
+  drawGrid(grid, hitReels)
+end
+
+local function bannerAnim(text, col, holdTime)
+  for i = 1, 3 do
+    term.setBackgroundColor(colors.black)
+    for yy = gridY0, gridY0 + ROWS * cellH do
+      term.setCursorPos(1, yy); term.write(string.rep(" ", w))
+    end
+    if i % 2 == 1 then
+      centerText(math.floor(h / 2), text, col)
+    end
+    sfx("minecraft:entity.player.levelup", 1, 1 + i * 0.1)
+    sleep(0.3)
+  end
+  centerText(math.floor(h / 2), text, col)
+  sleep(holdTime or 1)
+end
+
+-- ============================= SCORING =============================
+local function evaluateWays(grid)
+  local total, hits = 0, {}
+  for key, sym in pairs(SYM) do
+    if sym.pay then
+      local consecutive, waysMult = 0, 1
+      for r = 1, REELS do
+        local count = 0
+        for row = 1, ROWS do
+          local s = grid[r][row]
+          if s == key or SYM[s].wild then count = count + 1 end
+        end
+        if count > 0 then
+          consecutive = consecutive + 1
+          waysMult = waysMult * count
+        else
+          break
+        end
+      end
+      if consecutive >= 3 and sym.pay[consecutive] then
+        local amount = sym.pay[consecutive] * waysMult * (bet / 10)
+        total = total + amount
+        for r = 1, consecutive do
+          hits[r] = hits[r] or {}
+          for row = 1, ROWS do
+            local s = grid[r][row]
+            if s == key or SYM[s].wild then hits[r][row] = true end
+          end
+        end
+      end
+    end
+  end
+  return math.floor(total + 0.5), hits
+end
+
+local function countScatters(grid)
+  local n = 0
+  for r = 1, REELS do
+    for row = 1, ROWS do
+      if grid[r][row] == "SCAT" then n = n + 1 end
+    end
+  end
+  return n
+end
+
+-- ============================= BONUS ROUND =============================
+local function runBonus(triggerScatters)
+  local freeSpins = scatterSpins[math.min(triggerScatters, 5)] or 8
+  local multiplier = 1
+  local bonusTotal = 0
+
+  bannerAnim("BUFFALO BONUS TRIGGERED!", colors.orange, 1.5)
+
+  while freeSpins > 0 do
+    freeSpins = freeSpins - 1
+    drawFrame()
+    centerText(2, "FREE SPINS LEFT: " .. (freeSpins + 1) .. "   MULT x" .. multiplier, colors.lime)
+
+    local grid = genGrid(bonusWeights, 20) -- 20% chance any reel is fully wild
+    animateSpin(grid, bonusWeights)
+
+    local win, hits = evaluateWays(grid)
+    win = win * multiplier
+    if win > 0 then
+      bonusTotal = bonusTotal + win
+      flashWin(grid, hits)
+      drawHud("BONUS WIN: " .. win)
+      sleep(0.6)
+    end
+
+    local sc = countScatters(grid)
+    if sc >= 3 then
+      local add = scatterSpins[math.min(sc, 5)] or 5
+      freeSpins = freeSpins + add
+      multiplier = multiplier + 1
+      bannerAnim("RETRIGGER! +" .. add .. " SPINS", colors.magenta, 1.2)
+    end
+  end
+
+  credits = credits + bonusTotal
+  bannerAnim("BONUS TOTAL: " .. bonusTotal .. "!", colors.yellow, 2)
+end
+
+-- ============================= MAIN SPIN =============================
+local spinning = false
+local function doSpin()
+  if spinning then return end
+  if credits < bet then
+    drawHud("NOT ENOUGH CREDITS")
+    return
+  end
+  spinning = true
+  credits = credits - bet
+  drawFrame()
+
+  local grid = genGrid(baseWeights, nil)
+  animateSpin(grid, baseWeights)
+
+  local win, hits = evaluateWays(grid)
+  local scatters = countScatters(grid)
+
+  if win > 0 then
+    credits = credits + win
+    flashWin(grid, hits)
+    drawHud("WIN: " .. win .. "!")
+    sleep(0.6)
+  end
+
+  if scatters >= 3 then
+    runBonus(scatters)
+  end
+
+  drawFrame()
+  spinning = false
+end
+
+-- ============================= INPUT =============================
+local function changeBet(delta)
+  bet = math.max(minBet, math.min(maxBet, bet + delta))
+  drawHud()
+end
+
+local function handleButton(label)
+  if label == "SPIN!" then doSpin()
+  elseif label == "-BET" then changeBet(-betStep)
+  elseif label == "+BET" then changeBet(betStep)
+  elseif label == "MAXBET" then bet = math.min(maxBet, credits); drawHud()
+  end
+end
+
+local function pointInButton(x, y, b)
+  return x >= b.x1 and x <= b.x2 and y == b.y1
+end
+
+-- ============================= BOOT =============================
+drawFrame()
+centerText(2, "TOUCH SPIN OR PRESS [SPACE]   BET +/- WITH KEYS", colors.lightGray)
+local idleGrid = genGrid(baseWeights, nil)
+drawGrid(idleGrid)
+
+while true do
+  local event, p1, p2, p3 = os.pullEvent()
+  if event == "monitor_touch" then
+    local x, y = p2, p3
+    for _, b in ipairs(buttons) do
+      if pointInButton(x, y, b) then
+        handleButton(b.action)
+        break
+      end
+    end
+  elseif event == "key" then
+    if p1 == keys.space then doSpin()
+    elseif p1 == keys.minus then changeBet(-betStep)
+    elseif p1 == keys.equals or p1 == keys.plus then changeBet(betStep)
+    elseif p1 == keys.m then bet = math.min(maxBet, credits); drawHud()
+    end
+  end
+end
