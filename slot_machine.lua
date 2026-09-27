@@ -53,7 +53,7 @@ local c = colors
 
 -- ============================= STATE =============================
 -- Credits/bet are tracked to the cent (like a real machine) since the
--- paytable below is tuned to a realistic ~2 cent hold per dollar wagered.
+-- paytable below is tuned to a tighter ~5 cent hold per dollar wagered.
 local credits = 1000.00
 local bet = 10
 local betStep = 5
@@ -129,19 +129,19 @@ end
 -- reels (starting at reel 1) that match along a SINGLE payline (see
 -- LINE_PATTERNS below) -- a real fixed-payline system, not "ways". These
 -- numbers were tuned via a 2,000,000-spin simulation of that exact model
--- so the whole machine lands at ~98% RTP (a ~2 cent hold per dollar
--- wagered), matching a real slot machine.
+-- so the whole machine lands at ~95% RTP (a ~5 cent hold per dollar
+-- wagered), a tighter hold than a typical real slot machine.
 local SYM = {
   WILD = { label = "WILD", fg = c.black,     bg = c.yellow,    wild = true },
   SCAT = { label = "COIN", fg = c.white,     bg = c.orange,    scatter = true },
-  BUF  = { label = "BUFF", fg = c.white,     bg = c.brown,     pay = {[3]=81.21,  [4]=406.07, [5]=2436.40} },
-  EAG  = { label = "EAGL", fg = c.black,     bg = c.lightGray, pay = {[3]=64.97,  [4]=243.64, [5]=1218.20} },
-  WLF  = { label = "WOLF", fg = c.white,     bg = c.gray,      pay = {[3]=48.73,  [4]=162.43, [5]=812.13} },
-  ELK  = { label = "ELK ", fg = c.black,     bg = c.lime,      pay = {[3]=32.49,  [4]=129.94, [5]=649.71} },
-  A    = { label = " A  ", fg = c.red,       bg = c.white,     pay = {[3]=16.24,  [4]=64.97,  [5]=324.85} },
-  K    = { label = " K  ", fg = c.black,     bg = c.white,     pay = {[3]=16.24,  [4]=48.73,  [5]=243.64} },
-  Q    = { label = " Q  ", fg = c.red,       bg = c.white,     pay = {[3]=16.24,  [4]=48.73,  [5]=243.64} },
-  J    = { label = " J  ", fg = c.black,     bg = c.white,     pay = {[3]=16.24,  [4]=32.49,  [5]=162.43} },
+  BUF  = { label = "BUFF", fg = c.white,     bg = c.brown,     pay = {[3]=78.51,  [4]=392.57, [5]=2355.41} },
+  EAG  = { label = "EAGL", fg = c.black,     bg = c.lightGray, pay = {[3]=62.81,  [4]=235.54, [5]=1177.70} },
+  WLF  = { label = "WOLF", fg = c.white,     bg = c.gray,      pay = {[3]=47.11,  [4]=157.03, [5]=785.13} },
+  ELK  = { label = "ELK ", fg = c.black,     bg = c.lime,      pay = {[3]=31.41,  [4]=125.62, [5]=628.11} },
+  A    = { label = " A  ", fg = c.red,       bg = c.white,     pay = {[3]=15.70,  [4]=62.81,  [5]=314.05} },
+  K    = { label = " K  ", fg = c.black,     bg = c.white,     pay = {[3]=15.70,  [4]=47.11,  [5]=235.54} },
+  Q    = { label = " Q  ", fg = c.red,       bg = c.white,     pay = {[3]=15.70,  [4]=47.11,  [5]=235.54} },
+  J    = { label = " J  ", fg = c.black,     bg = c.white,     pay = {[3]=15.70,  [4]=31.41,  [5]=157.03} },
 }
 
 -- ============================= PAYLINES =============================
