@@ -1349,3 +1349,4 @@ end
 -- just lets the other two loops (which never return on their own) keep
 -- running forever either way.
 parallel.waitForAll(inputLoop, animationLoop, musicLoop)
+
