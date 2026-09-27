@@ -661,15 +661,32 @@ local BUFFALO_COLOR = colors.brown
 -- herd just quietly disables itself and only the rainbow wilds animate.
 local herdBandY0 = gridY0 + gridHeight
 local herdBandH = (topY + reelAreaH) - herdBandY0
-local HERD_ENABLED = herdBandH >= 4 and bgImage == nil
+local HERD_ENABLED = herdBandH >= 4
 local HERD_COUNT = 3
 local herdTick = 0
 
+-- Repaints the herd's strip back to whatever it should look like with no
+-- buffalo on it -- the background image's own pixels in that band if one
+-- is loaded, otherwise flat black -- so each frame erases the *previous*
+-- buffalo positions without erasing the background underneath them.
 local function clearHerdBand()
-  term.setBackgroundColor(colors.black)
-  for yy = 0, herdBandH - 1 do
-    term.setCursorPos(1, herdBandY0 + yy)
-    term.write(string.rep(" ", w))
+  if bgImage then
+    for yy = 0, herdBandH - 1 do
+      local y = herdBandY0 + yy
+      local imgRow = bgImage[y]
+      for x = 1, w do
+        local col = imgRow and imgRow[x]
+        term.setCursorPos(x, y)
+        term.setBackgroundColor(col or colors.black)
+        term.write(" ")
+      end
+    end
+  else
+    term.setBackgroundColor(colors.black)
+    for yy = 0, herdBandH - 1 do
+      term.setCursorPos(1, herdBandY0 + yy)
+      term.write(string.rep(" ", w))
+    end
   end
 end
 
@@ -1017,39 +1034,55 @@ centerText(2, "TOUCH SPIN OR PRESS [SPACE]   BET +/- WITH KEYS", colors.lightGra
 local lastTouch, lastTouchTime = nil, 0
 local TOUCH_DEBOUNCE_MS = 250
 
+-- ============================= MAIN LOOP =============================
+-- Button/key input and the idle animation heartbeat run as two separate
+-- coroutines via parallel.waitForAny, exactly like the startup jingle
+-- above. This matters: a plain single-loop os.pullEvent("timer") would
+-- have its own repeating timer silently swallowed by every sleep() call
+-- inside doSpin/animateSpin/flashWin (CC:Tweaked's sleep() discards any
+-- "timer" event that isn't the one *it* is waiting for), which is why the
+-- rainbow/herd animation used to freeze after the very first spin. Running
+-- it on its own coroutine means every event gets offered to both loops
+-- independently, so the animation's own sleep() always gets to see it.
+local function inputLoop()
+  while true do
+    local event, p1, p2, p3 = os.pullEvent()
+    if event == "monitor_touch" then
+      local x, y = p2, p3
+      for _, b in ipairs(buttons) do
+        if pointInButton(x, y, b) then
+          local now = os.epoch("utc")
+          if b.action ~= lastTouch or (now - lastTouchTime) > TOUCH_DEBOUNCE_MS then
+            lastTouch, lastTouchTime = b.action, now
+            handleButton(b.action)
+          end
+          break
+        end
+      end
+    elseif event == "key" then
+      if p1 == keys.space then doSpin()
+      elseif p1 == keys.minus then changeBet(-betStep)
+      elseif p1 == keys.equals or p1 == keys.plus then changeBet(betStep)
+      elseif p1 == keys.leftBracket then changeLines(-1)
+      elseif p1 == keys.rightBracket then changeLines(1)
+      elseif p1 == keys.m then
+        bet = maxBet
+        linesPlayed = maxLines
+        refreshControls()
+      end
+    end
+  end
+end
+
 -- Idle animation heartbeat -- rainbow wilds + the buffalo herd. Only ticks
 -- while nothing else is going on (spinning is false between spins), so it
 -- never fights with the spin/bonus animations for the screen.
 local ANIM_INTERVAL = 0.15
-local animTimer = os.startTimer(ANIM_INTERVAL)
-
-while true do
-  local event, p1, p2, p3 = os.pullEvent()
-  if event == "timer" and p1 == animTimer then
+local function animationLoop()
+  while true do
+    sleep(ANIM_INTERVAL)
     if not spinning then idleTick() end
-    animTimer = os.startTimer(ANIM_INTERVAL)
-  elseif event == "monitor_touch" then
-    local x, y = p2, p3
-    for _, b in ipairs(buttons) do
-      if pointInButton(x, y, b) then
-        local now = os.epoch("utc")
-        if b.action ~= lastTouch or (now - lastTouchTime) > TOUCH_DEBOUNCE_MS then
-          lastTouch, lastTouchTime = b.action, now
-          handleButton(b.action)
-        end
-        break
-      end
-    end
-  elseif event == "key" then
-    if p1 == keys.space then doSpin()
-    elseif p1 == keys.minus then changeBet(-betStep)
-    elseif p1 == keys.equals or p1 == keys.plus then changeBet(betStep)
-    elseif p1 == keys.leftBracket then changeLines(-1)
-    elseif p1 == keys.rightBracket then changeLines(1)
-    elseif p1 == keys.m then
-      bet = maxBet
-      linesPlayed = maxLines
-      refreshControls()
-    end
   end
 end
+
+parallel.waitForAny(inputLoop, animationLoop)
