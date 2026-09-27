@@ -116,9 +116,16 @@ local marginX, topY = 2, 3
 local hudH = 3
 local reelAreaW = w - marginX * 2
 local reelAreaH = h - topY - hudH - 1
-local cellW = math.floor(reelAreaW / REELS)
-local cellH = math.max(2, math.floor(reelAreaH / ROWS))
-local gridX0, gridY0 = marginX, topY
+
+-- Shrink the reel squares so more of the background image shows through
+-- around and between them, then center the whole grid in the screen.
+local REEL_SCALE = 0.75
+local cellW = math.max(4, math.floor((reelAreaW / REELS) * REEL_SCALE))
+local cellH = math.max(3, math.floor((reelAreaH / ROWS) * REEL_SCALE))
+local gridWidth = cellW * REELS
+local gridHeight = cellH * ROWS
+local gridX0 = math.floor((w - gridWidth) / 2) + 1
+local gridY0 = topY + math.floor(math.max(0, reelAreaH - gridHeight) / 2)
 
 local function cellPos(r, row)
   return gridX0 + (r - 1) * cellW, gridY0 + (row - 1) * cellH
