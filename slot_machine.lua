@@ -230,7 +230,11 @@ local function newMachine(mon, speaker, stationId)
   end
 
   -- ---- background music ----
-  local musicVolume = 1.5
+  -- Starts muted: with several stations booting at once off one computer,
+  -- defaulting to audible would mean every speaker blasting the riff
+  -- simultaneously the moment the game starts. Turn a station up with its
+  -- own VOL+ button once it's running.
+  local musicVolume = 0
   local function changeVolume(delta)
     musicVolume = math.max(MUSIC_MIN_VOL, math.min(MUSIC_MAX_VOL, musicVolume + delta))
   end
@@ -256,14 +260,29 @@ local function newMachine(mon, speaker, stationId)
     end
   end
 
+  -- paintutils.drawImage always draws to the global `term` internally --
+  -- it has no way to target a specific monitor -- which is exactly wrong
+  -- here (it would draw onto the computer's own tiny screen instead of
+  -- this station's monitor). So the image is drawn by hand, one pixel per
+  -- mon.write call, same technique clearHerdBand() below already uses.
   local function drawBackground()
     mon.setBackgroundColor(colors.black)
     mon.clear()
     if bgImage then
-      -- the optional 4th "target" arg on paintutils draw functions needs a
-      -- reasonably recent CC:Tweaked; on an older one this just silently
-      -- does nothing (pcall'd) and you'll get a black background instead.
-      pcall(paintutils.drawImage, bgImage, 1, 1, mon)
+      for y = 1, h do
+        local imgRow = bgImage[y]
+        if imgRow then
+          for x = 1, w do
+            local col = imgRow[x]
+            if col then
+              mon.setCursorPos(x, y)
+              mon.setBackgroundColor(col)
+              mon.write(" ")
+            end
+          end
+        end
+      end
+      mon.setBackgroundColor(colors.black)
     end
   end
 
