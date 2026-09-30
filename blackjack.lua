@@ -9,6 +9,7 @@
   * Practice money only - every seat starts with CONFIG.startBank
 
   Recommended monitor: 8 wide x 4 deep (or bigger) at text scale 0.5.
+  Card size scales automatically: fewer players / bigger monitor = bigger cards.
   Place the monitors while looking DOWN at the floor. The edge you were
   standing on is the player rail; the dealer is drawn at the far edge.
   Press Q on the computer to quit.
@@ -115,7 +116,27 @@ end
 ---------------------------------------------------------------------
 local RANK = { "A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K" }
 local SUIT = { "\3", "\4", "\5", "\6" }   -- hearts, diamonds, clubs, spades
-local CW, CH = 4, 3
+-- card sizes, smallest to largest; the table picks one from the monitor size + player count
+local TIERS = {
+  { w = 4,  h = 3 },
+  { w = 5,  h = 4 },
+  { w = 7,  h = 5 },
+  { w = 9,  h = 7 },
+  { w = 11, h = 8 },
+  { w = 13, h = 10 },
+}
+-- pip spots on a 3-column x 5-row grid for number cards (big sizes only)
+local PIPS = {
+  [2]  = { {1,0},{1,4} },
+  [3]  = { {1,0},{1,2},{1,4} },
+  [4]  = { {0,0},{2,0},{0,4},{2,4} },
+  [5]  = { {0,0},{2,0},{1,2},{0,4},{2,4} },
+  [6]  = { {0,0},{2,0},{0,2},{2,2},{0,4},{2,4} },
+  [7]  = { {0,0},{2,0},{1,1},{0,2},{2,2},{0,4},{2,4} },
+  [8]  = { {0,0},{2,0},{1,1},{0,2},{2,2},{1,3},{0,4},{2,4} },
+  [9]  = { {0,0},{2,0},{0,1},{2,1},{1,2},{0,3},{2,3},{0,4},{2,4} },
+  [10] = { {0,0},{2,0},{0,1},{2,1},{1,1},{1,3},{0,3},{2,3},{0,4},{2,4} },
+}
 
 local shoe, cutAt = {}, 0
 local function newShoe()
@@ -159,27 +180,53 @@ local function valueStr(cards, natural)
   return tostring(v)
 end
 
-local function paintCard(x, y, c, faceDown)
+local function paintCard(x, y, c, faceDown, T)
+  local cw, ch = T.w, T.h
   if faceDown then
-    fill(x, y, CW, CH, colors.blue)
-    txt(x + 1, y + 1, "\127\127", colors.lightBlue, colors.blue)
+    fill(x, y, cw, ch, colors.blue)
+    local pat = string.rep("\127", cw - 2)
+    for r = 1, math.max(1, ch - 2) do txt(x + 1, y + r, pat, colors.lightBlue, colors.blue) end
     return
   end
   local fg = (c.s <= 2) and colors.red or colors.black
-  local r = RANK[c.r]
-  fill(x, y, CW, CH, colors.white)
-  txt(x, y, r, fg, colors.white)
-  txt(x + 1, y + 1, SUIT[c.s], fg, colors.white)
-  txt(x + CW - #r, y + 2, r, fg, colors.white)
+  local W_ = colors.white
+  local r, su = RANK[c.r], SUIT[c.s]
+  fill(x, y, cw, ch, W_)
+  -- corners: rank + suit stacked in the left column so they stay visible when cards overlap
+  txt(x, y, r, fg, W_)
+  txt(x, y + 1, su, fg, W_)
+  txt(x + cw - #r, y + ch - 1, r, fg, W_)
+  if ch >= 4 then txt(x + cw - 1, y + ch - 2, su, fg, W_) end
+
+  local mx, my = x + math.floor(cw / 2), y + math.floor(ch / 2)
+  local big = cw >= 9 and ch >= 7
+  if c.r >= 2 and c.r <= 10 and big then
+    local iw, ih = cw - 4, ch - 2
+    for _, p in ipairs(PIPS[c.r]) do
+      txt(x + 2 + math.floor(p[1] * (iw - 1) / 2), y + 1 + math.floor(p[2] * (ih - 1) / 4), su, fg, W_)
+    end
+  elseif c.r >= 11 and cw >= 7 then
+    -- face card: coloured panel with the letter in the middle
+    local fx, fy, fw, fh = x + 2, y + 1, cw - 4, ch - 2
+    local panel = c.r == 13 and colors.yellow or (c.r == 12 and colors.pink or colors.lightBlue)
+    fill(fx, fy, fw, fh, panel)
+    txt(mx - 1, my, su .. r .. su, fg, panel)
+  elseif c.r == 1 and big then
+    txt(mx - 1, my - 1, " " .. su .. " ", fg, W_)
+    txt(mx - 1, my, su .. su .. su, fg, W_)
+    txt(mx - 1, my + 1, " " .. su .. " ", fg, W_)
+  elseif cw >= 5 and ch >= 4 then
+    txt(mx, my, su, fg, W_)
+  end
 end
 
-local function paintHand(x, y, maxW, cards, hideSecond)
+local function paintHand(x, y, maxW, cards, hideSecond, T)
   local n = #cards
-  local step = CW + 1
-  if n > 1 and (n - 1) * step + CW > maxW then
-    step = math.max(2, math.floor((maxW - CW) / (n - 1)))
+  local step = T.w + 1
+  if n > 1 and (n - 1) * step + T.w > maxW then
+    step = math.max(2, math.floor((maxW - T.w) / (n - 1)))
   end
-  for i, c in ipairs(cards) do paintCard(x + (i - 1) * step, y, c, hideSecond and i == 2) end
+  for i, c in ipairs(cards) do paintCard(x + (i - 1) * step, y, c, hideSecond and i == 2, T) end
 end
 
 ---------------------------------------------------------------------
@@ -218,26 +265,53 @@ end
 ---------------------------------------------------------------------
 -- table state
 ---------------------------------------------------------------------
-local SEAT_TOP = 14
 local nSeats, PW, OFF = 0, 0, 0
+local SEAT_TOP, CY, HAND_AREA = 14, 0, 0   -- seat header row, player-controls row, rows free for hands
+local SEAT_T, DEALER_T = 1, 1              -- card size tier for seats / dealer
 local seats = {}
 local dealer, hideHole = {}, true
 local msg, phase = "", "bet"
 local turnSeat, turnHand = 0, 0
 
-local function layoutFor(n)
-  local pw = math.min(40, math.floor(W / n))
-  return pw, math.floor((W - pw * n) / 2)
+-- Picks the biggest cards that fit. Fewer players = wider seats = bigger cards.
+-- Dealer cards are two sizes bigger than the players' when there's room.
+local function computeLayout(n)
+  local pw = math.min(44, math.floor(W / n))
+  local w = pw - 1
+  if w < 21 then return nil end
+  local st = 1
+  for t = #TIERS, 1, -1 do
+    if 3 * TIERS[t].w + 3 <= w then st = t; break end   -- 3 cards side by side, no overlap
+  end
+  local dt = math.min(#TIERS, st + 2)
+  local cy = H - 6                                      -- player controls sit on the bottom rows
+  while true do
+    local top = TIERS[dt].h + 10
+    local area = cy - (top + 3)
+    if area >= TIERS[st].h + 1 then
+      return { pw = pw, off = math.floor((W - pw * n) / 2), st = st, dt = dt, top = top, cy = cy, area = area }
+    end
+    if dt > st then dt = dt - 1
+    elseif st > 1 then st = st - 1; dt = st
+    else return nil end
+  end
 end
-local function fits(n)
-  local pw = layoutFor(n)
-  return pw >= 22 and H >= SEAT_TOP + 27
-end
+local function fits(n) return computeLayout(n) ~= nil end
 local function seatX(i) return OFF + 1 + (i - 1) * PW end
 
+-- biggest seat tier (<= SEAT_T) that fits `k` hands stacked above the controls
+local function tierForHands(k)
+  for t = SEAT_T, 1, -1 do
+    if k * (TIERS[t].h + 1) <= HAND_AREA then return t end
+  end
+end
+
 local function setupSeats(n)
+  local L = computeLayout(n)
   nSeats = n
-  PW, OFF = layoutFor(n)
+  PW, OFF = L.pw, L.off
+  SEAT_T, DEALER_T = L.st, L.dt
+  SEAT_TOP, CY, HAND_AREA = L.top, L.cy, L.area
   seats = {}
   for i = 1, n do
     seats[i] = { bal = CONFIG.startBank, main = 0, tri = 0, b7 = 0, hands = {}, side = {}, playing = false, roundStart = 0 }
@@ -248,6 +322,8 @@ end
 -- rendering
 ---------------------------------------------------------------------
 local function drawDealerArea()
+  local DT = TIERS[DEALER_T]
+  local rowTotal = 3 + DT.h
   fill(1, 1, W, 1, colors.gray)
   txt(2, 1, "BLACKJACK  -  PRACTICE TABLE", colors.yellow, colors.gray)
   local info = "Shoe: " .. #shoe .. " cards "
@@ -255,15 +331,15 @@ local function drawDealerArea()
 
   ctxt(1, W, 2, "DEALER", colors.white, FELT)
   if #dealer > 0 then
-    local width = #dealer * (CW + 1) - 1
-    paintHand(math.floor((W - width) / 2) + 1, 3, W - 2, dealer, hideHole)
+    local width = #dealer * (DT.w + 1) - 1
+    paintHand(math.max(1, math.floor((W - width) / 2) + 1), 3, W - 2, dealer, hideHole, DT)
     local s
     if hideHole then s = "Showing " .. valueStr({ dealer[1] }) else s = valueStr(dealer, true) end
-    ctxt(1, W, 7, s, colors.yellow, FELT)
+    ctxt(1, W, rowTotal, s, colors.yellow, FELT)
   end
-  ctxt(1, W, 8, msg, colors.white, FELT)
+  ctxt(1, W, rowTotal + 1, msg, colors.white, FELT)
 
-  -- control buttons (rows 9-11)
+  -- control buttons (3 rows)
   local ctrls
   if phase == "bet" then
     ctrls = { { "DEAL", 14, colors.black, colors.lime, { t = "deal" } }, { "MENU", 10, colors.white, colors.gray, { t = "menu" } } }
@@ -275,12 +351,12 @@ local function drawDealerArea()
     for _, c in ipairs(ctrls) do total = total + c[2] + 2 end
     local x = math.floor((W - total) / 2) + 1
     for _, c in ipairs(ctrls) do
-      bigButton(x, 9, c[2], 3, c[1], c[3], c[4], c[5])
+      bigButton(x, rowTotal + 2, c[2], 3, c[1], c[3], c[4], c[5])
       x = x + c[2] + 2
     end
   end
 
-  ctxt(1, W, 12, "BLACKJACK PAYS 3 TO 2 - DEALER HITS SOFT 17, STANDS ON HARD 17 - SIDE BETS $"
+  ctxt(1, W, rowTotal + 5, "BLACKJACK PAYS 3 TO 2 - DEALER HITS SOFT 17, STANDS ON HARD 17 - SIDE BETS $"
     .. CONFIG.sideMin .. " MIN", colors.lime, FELT)
 end
 
@@ -297,32 +373,37 @@ local function drawSeat(i)
   local b = "$" .. s.bal .. " "
   txt(x + w - #b, SEAT_TOP, b, hfg, active and colors.yellow or col)
 
-  -- hands
-  local hy = SEAT_TOP + 2
-  for h, hand in ipairs(s.hands) do
-    local y = hy + (h - 1) * 4
-    if active and turnHand == h then txt(x, y + 1, "\16", colors.yellow, FELT) end
-    paintHand(x + 1, y, w - 1, hand.cards, false)
-    local label = valueStr(hand.cards, not hand.fromSplit) .. " $" .. hand.bet
-    local fg = colors.white
-    if hand.result then
-      label = label .. " " .. hand.result
-      if hand.result:find("WIN") or hand.result:find("BJ") then fg = colors.yellow
-      elseif hand.result == "PUSH" then fg = colors.lightGray
-      else fg = colors.red end
-    end
-    txt(x + 1, y + 3, trim(label, w - 1), fg, FELT)
-  end
-
-  -- side bet results
-  local sy = hy + CONFIG.maxHands * 4
+  -- side bet results (just under the header)
   for k = 1, 2 do
     local line = s.side[k]
-    if line then txt(x, sy + k - 1, trim(line[1], w), line[2] and colors.yellow or colors.lightGray, FELT) end
+    if line then txt(x, SEAT_TOP + k, trim(line[1], w), line[2] and colors.yellow or colors.lightGray, FELT) end
+  end
+
+  -- hands: stacked so the last one sits right on top of the player's buttons
+  local cy = CY
+  if #s.hands > 0 then
+    local T = TIERS[tierForHands(#s.hands) or 1]
+    local hh = T.h + 1
+    local hy = cy - #s.hands * hh
+    for h, hand in ipairs(s.hands) do
+      local y = hy + (h - 1) * hh
+      if active and turnHand == h then
+        txt(x, y + math.floor(T.h / 2), "\16", colors.yellow, FELT)
+      end
+      paintHand(x + 1, y, w - 1, hand.cards, false, T)
+      local label = valueStr(hand.cards, not hand.fromSplit) .. " $" .. hand.bet
+      local fg = colors.white
+      if hand.result then
+        label = label .. " " .. hand.result
+        if hand.result:find("WIN") or hand.result:find("BJ") then fg = colors.yellow
+        elseif hand.result == "PUSH" then fg = colors.lightGray
+        else fg = colors.red end
+      end
+      txt(x + 1, y + T.h, trim(label, w - 1), fg, FELT)
+    end
   end
 
   -- controls
-  local cy = sy + 3
   if phase == "bet" then
     local function betLine(y, label, key, chips)
       txt(x, y, trim(label .. " $" .. s[key], w), colors.white, FELT)
@@ -343,6 +424,7 @@ local function drawSeat(i)
     local c = hand.cards
     local canDouble = #c == 2 and s.bal >= hand.bet and not hand.splitAce
     local canSplit = #c == 2 and cardVal(c[1]) == cardVal(c[2]) and #s.hands < CONFIG.maxHands and s.bal >= hand.bet
+      and tierForHands(#s.hands + 1) ~= nil
     local bw = math.floor((w - 1) / 2)
     bigButton(x, cy, bw, 3, "HIT", colors.black, colors.lime, { t = "hit" })
     bigButton(x + bw + 1, cy, bw, 3, "STAND", colors.white, colors.red, { t = "stand" })
@@ -422,7 +504,7 @@ local function menu()
   end
   ctxt(1, W, 17, "Tap a number, or press 1-6 on the computer", colors.lightGray, FELT)
   if not fits(1) then
-    ctxt(1, W, 19, ("Monitor is %dx%d - need 41+ rows. Make it 4+ blocks deep."):format(W, H), colors.red, FELT)
+    ctxt(1, W, 19, ("Monitor is %dx%d - too small. Make it 8 wide x 4+ deep."):format(W, H), colors.red, FELT)
   end
   scr.setVisible(true)
   local a = waitAction(true)
@@ -566,7 +648,8 @@ local function playTurns(active)
           hand.done = true
           if handValue(hand.cards) > 21 then hand.result = "BUST"; snd("bass", 4) end
           msg = "P" .. i .. " doubles"; pause(0.8)
-        elseif a.t == "split" and #hand.cards == 2 and s.bal >= hand.bet and #s.hands < CONFIG.maxHands then
+        elseif a.t == "split" and #hand.cards == 2 and s.bal >= hand.bet and #s.hands < CONFIG.maxHands
+          and tierForHands(#s.hands + 1) then
           s.bal = s.bal - hand.bet
           local moved = table.remove(hand.cards, 2)
           local aces = moved.r == 1
