@@ -22,7 +22,8 @@
 local CONFIG = {
   textScale     = 0.5,                 -- 0.5 = sharpest; raise if it looks cramped
   creditFile    = "triple7_credits.txt",
-  startCredits  = 0,
+  startCredits  = 1000,                -- practice bankroll
+  practiceMode  = true,                -- refill to startCredits when you run dry
   betLevels     = {1, 3, 5, 9, 18, 27, 45, 90},
   freeSpins     = 8,
   freeSpinMult  = 3,
@@ -478,7 +479,12 @@ end
 local function doSpin(isFree)
   local bet = CONFIG.betLevels[state.betIdx]
   if not isFree then
-    if state.credits < bet then
+    if state.credits < bet and CONFIG.practiceMode then
+      state.credits = CONFIG.startCredits
+      saveCredits()
+      state.msg = "PRACTICE MODE - REFILLED TO " .. CONFIG.startCredits
+      note("chime", 12); draw(); return
+    elseif state.credits < bet then
       state.msg = "NOT ENOUGH CREDITS - SEE ATTENDANT"
       note("didgeridoo", 4); draw(); return
     end
