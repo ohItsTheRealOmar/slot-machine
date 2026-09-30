@@ -15,6 +15,9 @@
      heartbeat/rising-note suspense sound and a flashing frame.
    - 3 bricks (one on each of reels 1, 3, 5) -> the wolf huffs and puffs
      and the bonus starts.
+   - RANDOM POP: any spin can also trigger the bonus on its own (no
+     bricks needed). The odds go up with the bet: 1 in 1500 spins at 50
+     credits up to 1 in 550 at 500 credits (RANDOM_BONUS_ODDS).
 
   THE POP (which power-ups you get)
    - Every READY (3/3) pig pops for sure.
@@ -69,7 +72,7 @@ local PAYS = {
   Q    = { [3] = 3,   [4] = 9,   [5] = 32  },
   J    = { [3] = 3,   [4] = 8,   [5] = 28  },
 }
-local PAY_SCALE = 2.1 -- global multiplier on PAYS (sim-tuned)
+local PAY_SCALE = 1.93 -- global multiplier on PAYS (sim-tuned)
 
 -- symbol weights on the reel strips (WOLF only appears on WILD_REELS)
 local BASE_WEIGHTS = { WOLF = 3, PIG = 4, STIK = 5, STRW = 6, A = 8, K = 8, Q = 9, J = 9 }
@@ -77,6 +80,10 @@ local WILD_REELS  = { [2] = true, [3] = true, [4] = true }
 local BRICK_REELS = { [1] = true, [3] = true, [5] = true }
 local BRICK_CHANCE = 0.215       -- chance each brick reel shows one brick
 local BRICK_COLOR_WEIGHTS = { R = 1, B = 1, Y = 1 }
+
+-- RANDOM POP: any spin WITHOUT 3 bricks can still trigger the bonus.
+-- "1 in N spins" per bet level -- bigger bet = better odds.
+local RANDOM_BONUS_ODDS = { [50] = 1500, [100] = 1100, [150] = 850, [250] = 700, [500] = 550 }
 
 -- pig popping
 local RANDOM_POP_BASE = 0.15      -- chance an un-full pig pops anyway...
@@ -273,6 +280,11 @@ local function findBricks(grid, r1, r2)
     end
   end
   return out
+end
+
+local function randomBonusHit(betCredits)
+  local odds = RANDOM_BONUS_ODDS[betCredits]
+  return odds ~= nil and math.random() < 1 / odds
 end
 
 -- decides which pigs pop; resets popped meters; returns powers set
@@ -479,7 +491,7 @@ end
 if HUFF_SIM then
   return {
     genBaseGrid = genBaseGrid, evaluateLines = evaluateLines, findBricks = findBricks,
-    popPigs = popPigs, comboId = comboId, newBonusState = newBonusState,
+    popPigs = popPigs, randomBonusHit = randomBonusHit, BET_CREDITS = BET_CREDITS, comboId = comboId, newBonusState = newBonusState,
     seedBonus = seedBonus, prepareSpin = prepareSpin, resolveSpin = resolveSpin,
     bonusOver = bonusOver, bonusTotal = bonusTotal,
     setPayScale = function(v) PAY_SCALE = v end,
@@ -1213,9 +1225,21 @@ local function newMachine(mon, speaker, stationId)
       setMessage(#bricks == 2 and "SO CLOSE! 2 BRICKS" or "NO WIN - TRY AGAIN", c.red)
     end
 
-    if #bricks >= 3 then
+    local randomPop = #bricks < 3 and randomBonusHit(BET_CREDITS[betIdx])
+    if #bricks >= 3 or randomPop then
       sleep(0.8)
-      local bonusWin = runBonus(bricks)
+      if randomPop then
+        setMessage("WAIT... THE WOLF IS SNEAKING UP!", c.orange)
+        for i = 1, 6 do
+          drawReelFrame(i % 2 == 1 and c.red or FRAME_COL)
+          drawGrid(grid)
+          note("basedrum", 2, 4 + i)
+          sleep(0.15)
+        end
+        drawReelFrame()
+        drawGrid(grid)
+      end
+      local bonusWin = runBonus(randomPop and {} or bricks)
       drawFrame()
       setMessage("BONUS PAID $" .. money(bonusWin) .. "!", c.lime)
     end
