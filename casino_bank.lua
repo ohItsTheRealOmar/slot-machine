@@ -89,6 +89,52 @@ function bank.take(player, amt) return move(player, cfg.house, amt) end
 function bank.pay(player, amt)  return move(cfg.house, player, amt) end
 
 ---------------------------------------------------------------------
+-- where players are (lets games know who tapped a seat)
+---------------------------------------------------------------------
+local function parsePos(line)
+  local name = line:match("([%w_]+) has the following entity data")
+  local a, b, c = line:match("%[([^,%]]+),%s*([^,%]]+),%s*([^,%]]+)%]")
+  local function num(s) if s then return tonumber((s:gsub("%s", ""):gsub("[dD]$", ""))) end end
+  local x, y, z = num(a), num(b), num(c)
+  if name and x and y and z then return name, x, y, z end
+end
+
+-- position of one player: { x, y, z } or nil + reason
+function bank.playerPos(name)
+  if not bank.validName(name) then return nil, "bad name" end
+  local ok, out = commands.exec("data get entity " .. name .. " Pos")
+  if ok then
+    for _, line in ipairs(out or {}) do
+      local _, x, y, z = parsePos(line)
+      if x then return { x = x, y = y, z = z } end
+    end
+  end
+  return nil, "is " .. name .. " online and in this dimension?"
+end
+
+-- players within `range` blocks of point p, nearest first: { {name, d}, ... }
+-- opts.name = only look for that player, opts.limit = max players (default 3)
+function bank.playersNear(p, range, opts)
+  opts = opts or {}
+  local sel = ("@a[distance=..%s,sort=nearest,limit=%d"):format(range, opts.limit or 3)
+  if opts.name then
+    if not bank.validName(opts.name) then return {}, {} end
+    sel = sel .. ",name=" .. opts.name
+  end
+  sel = sel .. "]"
+  local _, out = commands.exec(("execute positioned %s %s %s as %s run data get entity @s Pos"):format(p.x, p.y, p.z, sel))
+  local list = {}
+  for _, line in ipairs(out or {}) do
+    local n, x, y, z = parsePos(line)
+    if n and bank.validName(n) then
+      list[#list + 1] = { name = n, d = math.sqrt((x - p.x) ^ 2 + (y - p.y) ^ 2 + (z - p.z) ^ 2) }
+    end
+  end
+  table.sort(list, function(u, v) return u.d < v.d end)
+  return list, out or {}
+end
+
+---------------------------------------------------------------------
 -- ledger
 ---------------------------------------------------------------------
 local function stamp() return os.date("%Y-%m-%d %H:%M:%S") end
