@@ -4,7 +4,11 @@
   Setup:  computer + monitor wall (built for 3x4, auto-fits any size)
           optional speaker anywhere on the computer / network
   Run:    triple7
-  Terminal commands while running:  add <n> | set <n> | credits | exit
+  Real money: run on a COMMAND COMPUTER with casino_slot.lua, casino_bank.lua
+          and casino_net.lua next to it (+ wireless/ender modem for the main
+          computer). Closest player plays; bets come out of their EconomyCraft
+          balance, wins go back in. Normal computer = practice credits.
+          Owner console on the computer: enter the PIN, then 'help'.
 
   Rules:
   * 3 reels, 3 rows visible, up to 9 paylines.
@@ -21,6 +25,7 @@
 ------------------------------------------------------------------ CONFIG
 local CONFIG = {
   textScale     = 0.5,                 -- 0.5 = sharpest; raise if it looks cramped
+  -- creditFile no longer used (real money / practice lives in casino_slot)
   creditFile    = "triple7_credits.txt",
   startCredits  = 1000,                -- practice bankroll
   practiceMode  = true,                -- refill to startCredits when you run dry
@@ -165,6 +170,9 @@ if not term or not peripheral then
 end
 
 ------------------------------------------------------------------ PERIPHERALS
+local slot = require("casino_slot")
+slot.setup{ game = "triple7", kind = "Triple 7", practiceCredits = CONFIG.startCredits }
+
 local mon = peripheral.find("monitor")
 if not mon then error("No monitor found - attach the 3x4 monitor wall", 0) end
 local speaker = peripheral.find("speaker")
@@ -172,6 +180,13 @@ math.randomseed(os.epoch("utc"))
 
 local function note(inst, pitch, vol)
   if speaker then pcall(speaker.playNote, inst, vol or 1, pitch) end
+end
+
+-- the player on this machine (real money on a Command Computer)
+local seat = slot.seat(peripheral.getName(mon))
+local function creditLabel()
+  if not slot.LIVE then return "CREDITS" end
+  return seat:name() or "BALANCE"
 end
 
 ------------------------------------------------------------------ STATE
@@ -182,17 +197,9 @@ local state = {
   flash = nil,
 }
 
-local function loadCredits()
-  if fs.exists(CONFIG.creditFile) then
-    local h = fs.open(CONFIG.creditFile, "r")
-    local v = tonumber(h.readAll()); h.close()
-    state.credits = v or 0
-  end
-end
-local function saveCredits()
-  local h = fs.open(CONFIG.creditFile, "w")
-  h.write(tostring(state.credits)); h.close()
-end
+-- state.credits just mirrors the player's balance (+ wins not paid yet)
+local function loadCredits() state.credits = seat:credits() end
+local function saveCredits() state.credits = seat:credits() end
 
 ------------------------------------------------------------------ SCREEN BUFFER
 local W, H
@@ -355,7 +362,7 @@ local function drawPanel()
   local y = Lay.panelY
   local bet = CONFIG.betLevels[state.betIdx]
   local boxes = {
-    {"CREDITS", tostring(state.credits), "4"},
+    {creditLabel(), tostring(state.credits), "4"},
     {"BET", tostring(bet), "0"},
     {"LINES", linesFor(bet) .. "x" .. (math.floor(bet / linesFor(bet))), "0"},
     {state.free > 0 and "FREE WIN" or "WIN",
@@ -364,7 +371,7 @@ local function drawPanel()
   local bw = math.floor(W / 4)
   for i, b in ipairs(boxes) do
     local bx = 1 + (i - 1) * bw
-    ctext(bx, y, bw, b[1], "8", "f")
+    ctext(bx, y, bw, b[1]:sub(1, bw), "8", "f")
     ctext(bx, y + 1, bw, b[2], b[3], "f")
   end
   ctext(1, y + 2, W, state.msg or "", state.free > 0 and "4" or "0", "f")
@@ -479,17 +486,13 @@ end
 local function doSpin(isFree)
   local bet = CONFIG.betLevels[state.betIdx]
   if not isFree then
-    if state.credits < bet and CONFIG.practiceMode then
-      state.credits = CONFIG.startCredits
-      saveCredits()
-      state.msg = "PRACTICE MODE - REFILLED TO " .. CONFIG.startCredits
-      note("chime", 12); draw(); return
-    elseif state.credits < bet then
-      state.msg = "NOT ENOUGH CREDITS - SEE ATTENDANT"
-      note("didgeridoo", 4); draw(); return
-    end
-    state.credits = state.credits - bet
+    local ok, why, kind = seat:begin(bet)
     saveCredits()
+    if not ok then
+      state.msg = why
+      if kind == "welcome" then note("chime", 12) else note("didgeridoo", 4) end
+      draw(); return
+    end
     state.lastWin = 0
   end
   state.hl = {}
@@ -521,7 +524,7 @@ local function doSpin(isFree)
   state.hl = res.wins
 
   if res.total > 0 then
-    if not isFree then state.credits = state.credits + res.total; saveCredits() end
+    if not isFree then seat:win(res.total); saveCredits() end
     state.msg = "WIN " .. res.total .. "!"
     if res.jackpot then jackpotShow(res.total) else winSound(res.total >= bet * 10) end
     rollUp(res.total, res.total >= bet * 10)
@@ -567,7 +570,7 @@ local function runFreeSpins()
     sleep(1.2)
   end
   local won = state.freeWin
-  state.credits = state.credits + won
+  seat:win(won)
   saveCredits()
   state.lastWin = won
   state.freeWin, state.freeTotal = 0, 0
@@ -583,6 +586,8 @@ local function hit(x, y)
 end
 
 local function onTouch(x, y)
+  local used, usedMsg = seat:touch()
+  if used then state.msg = usedMsg; draw(); return end
   if state.info then state.info = false; draw(); return end
   local id = hit(x, y)
   if not id then
@@ -597,6 +602,10 @@ local function onTouch(x, y)
   elseif id == "spin" then
     doSpin(false)
     if state.free > 0 then runFreeSpins() end
+    local problem = seat:finish()
+    saveCredits()
+    if problem then state.msg = problem end
+    draw()
     return
   end
   local bet = CONFIG.betLevels[state.betIdx]
@@ -626,31 +635,10 @@ local function gameLoop()
   end
 end
 
-local function adminLoop()
-  term.clear(); term.setCursorPos(1, 1)
-  print("TRIPLE 7 JACKPOT running on monitor")
-  print("Commands: add <n> | set <n> | credits | exit")
-  while true do
-    write("> ")
-    local cmd, n = (read() or ""):match("^(%S*)%s*(%-?%d*)")
-    n = tonumber(n)
-    if cmd == "add" and n then
-      state.credits = state.credits + n; saveCredits()
-      print("Credits: " .. state.credits); os.queueEvent("credits_changed")
-    elseif cmd == "set" and n then
-      state.credits = n; saveCredits()
-      print("Credits: " .. state.credits); os.queueEvent("credits_changed")
-    elseif cmd == "credits" then
-      print("Credits: " .. state.credits)
-    elseif cmd == "exit" then
-      return
-    elseif cmd ~= "" then
-      print("?  add <n> | set <n> | credits | exit")
-    end
-  end
-end
+-- walked-away players disappear from the screen
+seat:onChange(function() saveCredits(); os.queueEvent("credits_changed") end)
 
 loadCredits()
-parallel.waitForAny(gameLoop, adminLoop)
+slot.run(gameLoop)
 mon.setBackgroundColor(colors.black); mon.clear()
 print("Triple 7 stopped.")
