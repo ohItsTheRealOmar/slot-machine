@@ -4,10 +4,11 @@
   * Runs on a COMMAND COMPUTER (needed to move EconomyCraft money)
   * Needs casino_bank.lua in the same folder
   * Floor-mounted ADVANCED monitor (facing up) that players walk on
-  * One Advanced Peripherals PLAYER DETECTOR per seat, all on wired modems
-      - right-click your seat's detector to SIT
-      - place chips, right-click again to lock in (READY)
-      - with no bet placed, right-click to LEAVE
+  * Players JOIN by tapping the JOIN button at their seat - the table asks
+    the server which player is standing closest to that seat
+      - tap chips to bet, tap READY to lock in, tap LEAVE to stand up
+      - one-time setup: owner types `calibrate`, stands at each seat and
+        taps SET SEAT so the table learns where the seats are
   * All bets go to the HOUSE account (the owner's balance); all wins come out of it
   * Dealer HITS soft 17, STANDS on hard 17; BJ pays 3:2; double; split to 4 hands
   * Side bets: TRILUX and BLAZING 7s
@@ -29,6 +30,9 @@ local CONFIG = {
   dealDelay   = 0.35,
   turnTimeout = 45,     -- seconds before an idle player auto-stands
   resultWait  = 30,     -- seconds before the next hand starts on its own
+  joinRange   = 3,      -- blocks from a seat a player can be to JOIN / READY
+  leaveRange  = 8,      -- seated players further away than this are removed
+  crowdMargin = 0.75,   -- if two players are this close to equally near, ask them to make room
 
   -- Payouts are "X to 1". Change these to match your casino's paytable.
   trilux = {            -- player's first 2 cards + dealer up card
@@ -69,7 +73,7 @@ local S = {
   open      = true,
   ecoPrefix = "eco",
   balCmd    = "bal",
-  detectors = {},      -- [peripheral name] = seat number
+  seatPos   = {},      -- [seat number] = { x, y, z } world spot, set with `calibrate`
 }
 
 local function loadSettings()
@@ -152,7 +156,7 @@ local function snd(inst, pitch)
   if spk then pcall(spk.playNote, inst or "hat", 0.7, pitch or 12) end
 end
 
-local mapping = false   -- true while the owner is re-mapping detectors
+local calibrating = false   -- true while the owner is setting seat positions
 
 ---------------------------------------------------------------------
 -- drawing helpers
@@ -443,9 +447,34 @@ local function clearSeat(s)
   for k, v in pairs(fresh) do s[k] = v end
 end
 
-local function seatForDetector(dev)
-  local i = S.detectors[dev]
-  if i and i <= nSeats then return i end
+---------------------------------------------------------------------
+-- who is at which seat
+---------------------------------------------------------------------
+local function seatReady(i) return S.seatPos[i] ~= nil end
+
+-- the player who should get seat i when JOIN is tapped
+local function whoIsAt(i)
+  if not seatReady(i) then return nil, "Seat " .. i .. " isn't set up yet - owner: run calibrate" end
+  local list = bank.playersNear(S.seatPos[i], CONFIG.joinRange, { limit = 3 })
+  if #list == 0 then return nil, "Stand at seat " .. i .. " and tap JOIN" end
+  if #list > 1 and list[2].d - list[1].d < CONFIG.crowdMargin then
+    return nil, "Too crowded at seat " .. i .. " - make room and tap JOIN again"
+  end
+  return list[1].name
+end
+
+-- is `name` the closest player to seat i?
+local function isNearest(i, name)
+  if not seatReady(i) then return false end
+  local list = bank.playersNear(S.seatPos[i], CONFIG.joinRange, { limit = 1 })
+  return list[1] ~= nil and list[1].name == name
+end
+
+-- is `name` still anywhere near seat i?
+local function stillThere(i, name, range)
+  if not seatReady(i) then return true end
+  local list = bank.playersNear(S.seatPos[i], range, { name = name, limit = 1 })
+  return #list > 0
 end
 
 ---------------------------------------------------------------------
@@ -587,10 +616,13 @@ local function drawSeat(i)
   end
 
   -- controls
-  if not s.name then
-    txt(x, cy, "OPEN SEAT", colors.lightGray, FELT)
-    txt(x, cy + 2, trim("Right-click the player", w), colors.white, FELT)
-    txt(x, cy + 3, trim("detector to sit down", w), colors.white, FELT)
+  if calibrating and phase == "bet" then
+    bigButton(x, cy, w, 3, (seatReady(i) and "RESET SEAT " or "SET SEAT ") .. i, colors.black, colors.yellow, { t = "calib", seat = i })
+    txt(x, cy + 4, trim(seatReady(i) and "Seat is set" or "Not set yet", w), seatReady(i) and colors.lime or colors.orange, FELT)
+    txt(x, cy + 5, trim("Owner: stand here, tap", w), colors.white, FELT)
+  elseif not s.name then
+    bigButton(x, cy, w, 5, "JOIN", colors.black, colors.lime, { t = "join", seat = i })
+    txt(x, cy + 6, trim("Stand at this seat, tap JOIN", w), colors.lightGray, FELT)
   elseif phase == "bet" then
     local function betLine(y, label, key)
       txt(x, y, trim(label .. " $" .. s[key], w), colors.white, FELT)
@@ -607,9 +639,14 @@ local function drawSeat(i)
     betLine(cy, "MAIN", "main")
     betLine(cy + 2, "TRILUX", "tri")
     betLine(cy + 4, "BLAZING 7s", "b7")
-    if s.ready then txt(x, cy + 6, trim("\4 READY - bet locked", w), colors.lime, FELT)
-    elseif s.main > 0 then txt(x, cy + 6, trim("Right-click detector: READY", w), colors.yellow, FELT)
-    else txt(x, cy + 6, trim("Right-click detector: LEAVE", w), colors.lightGray, FELT) end
+    local rx = x
+    if s.ready then
+      rx = rx + button(rx, cy + 6, "UNLOCK", colors.white, colors.orange, { t = "ready", seat = i }) + 1
+      txt(rx, cy + 6, trim("\4 READY", x + w - rx), colors.lime, FELT)
+    else
+      rx = rx + button(rx, cy + 6, "READY", colors.black, colors.lime, { t = "ready", seat = i }) + 1
+      button(rx, cy + 6, "LEAVE", colors.white, colors.gray, { t = "leave", seat = i })
+    end
   elseif active then
     local hand = s.hands[turnHand]
     local c = hand.cards
@@ -661,9 +698,6 @@ local function waitAction(timeout)
         local bt = buttons[i]
         if b >= bt[1] and b <= bt[3] and c >= bt[2] and c <= bt[4] then return bt[5] end
       end
-    elseif ev == "playerClick" and not mapping then
-      local seat = seatForDetector(b)
-      if seat then return { t = "detector", seat = seat, name = a } end
     elseif ev == "timer" and a == timer then
       return { t = "timeout" }
     elseif ev == "casino_settings" then
@@ -672,44 +706,67 @@ local function waitAction(timeout)
   end
 end
 
--- sit / ready / leave, driven by right-clicking a seat's player detector
-local function handleDetector(a)
+-- JOIN / READY / LEAVE / calibration taps on a seat
+local SEAT_ACTIONS = { join = true, ready = true, leave = true, calib = true }
+
+local function handleSeat(a)
   local s = seats[a.seat]
-  if not s or not bank.validName(a.name) then return end
-  local name = a.name
-  if not s.name then
+  if not s then return end
+
+  if a.t == "calib" then
+    if not calibrating then return end
+    local p, err = bank.playerPos(S.house)
+    if not p then msg = "Couldn't find " .. S.house .. ": " .. tostring(err); return end
+    S.seatPos[a.seat] = p
+    saveSettings()
+    msg = ("Seat %d set at %d, %d, %d"):format(a.seat, math.floor(p.x), math.floor(p.y), math.floor(p.z))
+    snd("pling", 18)
+
+  elseif a.t == "join" then
+    if s.name then return end
+    local name, err = whoIsAt(a.seat)
+    if not name then msg = err; snd("bass", 6); return end
     for j, o in ipairs(seats) do
       if o.name == name then
-        if o.playing then msg = name .. " is still in a hand at seat " .. j; return end
+        if o.playing or o.ready then msg = name .. " is already playing at seat " .. j; return end
         clearSeat(o)
       end
     end
     s.name = name
     refreshBal(s)
-    msg = name .. " sits at seat " .. a.seat
+    msg = name .. " joined seat " .. a.seat
     snd("pling", 16)
-  elseif s.name ~= name then
-    msg = "Seat " .. a.seat .. " belongs to " .. s.name
-  elseif s.playing then
-    msg = name .. ": finish your hand first"
-  elseif phase == "bet" and s.ready then
-    s.ready = false
-    msg = name .. " unlocked their bet"
-  elseif phase == "bet" and s.main > 0 then
+
+  elseif a.t == "leave" then
+    if s.name and not s.playing and not s.ready then
+      msg = s.name .. " left the table"
+      clearSeat(s)
+    end
+
+  elseif a.t == "ready" then
+    if not s.name or s.playing or phase ~= "bet" then return end
+    if not isNearest(a.seat, s.name) then
+      msg = s.name .. " has to be standing at seat " .. a.seat .. " to do that"
+      return
+    end
+    if s.ready then
+      s.ready = false
+      msg = s.name .. " unlocked their bet"
+      return
+    end
     refreshBal(s)
     local tot = s.main + s.tri + s.b7
-    if s.main < S.mainMin or s.main > S.mainMax then
-      msg = ("%s: main bet must be $%d-$%d"):format(name, S.mainMin, S.mainMax)
+    if s.main <= 0 then
+      msg = s.name .. ": place a MAIN bet first"
+    elseif s.main < S.mainMin or s.main > S.mainMax then
+      msg = ("%s: main bet must be $%d-$%d"):format(s.name, S.mainMin, S.mainMax)
     elseif tot > s.bal then
-      msg = name .. ": not enough money ($" .. s.bal .. ")"
+      msg = s.name .. ": not enough money ($" .. s.bal .. ")"
     else
       s.ready = true
-      msg = name .. " is READY"
+      msg = s.name .. " is READY"
       snd("bell", 14)
     end
-  else
-    clearSeat(s)
-    msg = name .. " left the table"
   end
 end
 
@@ -724,9 +781,15 @@ end
 local function bettingPhase(keepMsg)
   phase, dealer, hideHole, turnSeat = "bet", {}, true, 0
   if S.seats ~= nSeats then setupSeats(S.seats) end
-  for _, s in ipairs(seats) do
+  local gone = {}
+  for i, s in ipairs(seats) do
     s.hands, s.side, s.playing, s.ready = {}, {}, false, false
     s.wagered, s.returned, s.owed = 0, 0, 0
+    -- players who walked away lose their seat
+    if s.name and not stillThere(i, s.name, CONFIG.leaveRange) then
+      gone[#gone + 1] = s.name
+      clearSeat(s)
+    end
     s.main = clampBet(s.main, S.mainMin, S.mainMax)
     s.tri  = clampBet(s.tri, S.sideMin, S.sideMax)
     s.b7   = clampBet(s.b7, S.sideMin, S.sideMax)
@@ -735,7 +798,8 @@ local function bettingPhase(keepMsg)
   end
   if #shoe <= cutAt then newShoe(); msg = "New shoe shuffled - place your bets"
   elseif keepMsg then msg = keepMsg
-  else msg = "Place bets, then right-click your detector to lock in" end
+  elseif #gone > 0 then msg = table.concat(gone, ", ") .. " walked away - seat opened"
+  else msg = "Place bets, then tap READY" end
 
   while true do
     render()
@@ -743,8 +807,8 @@ local function bettingPhase(keepMsg)
     local s = a.seat and seats[a.seat]
     if a.t == "refresh" then
       if S.seats ~= nSeats then setupSeats(S.seats) end
-    elseif a.t == "detector" then
-      handleDetector(a)
+    elseif SEAT_ACTIONS[a.t] then
+      handleSeat(a)
     elseif a.t == "bet" and s and s.name and not s.ready then
       local cur = s[a.k]
       local isMain = a.k == "main"
@@ -759,7 +823,9 @@ local function bettingPhase(keepMsg)
       s[a.k] = 0
       if a.k == "main" then s.tri, s.b7 = 0, 0 end
     elseif a.t == "deal" then
-      if not S.open then
+      if calibrating then
+        msg = "Finish calibrating first (type calibrate on the computer)"
+      elseif not S.open then
         msg = "Table is closed"
       else
         local any, bad = false, nil
@@ -769,7 +835,7 @@ local function bettingPhase(keepMsg)
           end
         end
         if bad then msg = bad .. ": side bets need a main bet"
-        elseif not any then msg = "Nobody is READY - right-click your detector to lock in"
+        elseif not any then msg = "Nobody is READY - place a bet and tap READY"
         else return "deal" end
       end
     end
@@ -779,10 +845,18 @@ end
 local function dealRound()
   phase = "deal"
   local ready = {}
+  local why
   for i, s in ipairs(seats) do
-    if s.ready and s.name and s.main >= S.mainMin and s.main <= S.mainMax then ready[#ready + 1] = i end
+    if s.ready and s.name and s.main >= S.mainMin and s.main <= S.mainMax then
+      if stillThere(i, s.name, CONFIG.joinRange + 1) then
+        ready[#ready + 1] = i
+      else
+        s.ready = false
+        why = s.name .. " left their seat - bet not taken"
+      end
+    end
   end
-  if #ready == 0 then return nil, "Nobody is ready" end
+  if #ready == 0 then return nil, why or "Nobody is ready" end
 
   local hb = bank.balance(S.house)
   if not hb then return nil, "Can't read the house balance - tell the owner" end
@@ -880,8 +954,8 @@ local function playTurns(active)
         if a.t == "timeout" then
           hand.done = true
           msg = s.name .. " took too long - stands"; pause(0.8)
-        elseif a.t == "detector" then
-          handleDetector(a)
+        elseif a.t == "join" then
+          handleSeat(a)
         elseif a.t == "hit" then
           table.insert(hand.cards, drawCard()); snd("hat", 12)
           local v = handValue(hand.cards)
@@ -1013,36 +1087,35 @@ local function playRound()
     render()
     local a = waitAction(CONFIG.resultWait)
     if a.t == "next" or a.t == "timeout" then return end
-    if a.t == "detector" then handleDetector(a) end
+    if a.t == "join" or a.t == "leave" then handleSeat(a) end
   end
 end
 
 ---------------------------------------------------------------------
 -- owner console (on the computer's own screen)
 ---------------------------------------------------------------------
-local function mapDetectors()
-  mapping = true
-  local map, seat, done = {}, 1, false
-  print("Right-click each seat's detector in order,")
-  print("starting with seat 1. Press ENTER when done.")
-  while seat <= 6 and not done do
-    print("Seat " .. seat .. "...")
-    while true do
-      local e, a, b = os.pullEvent()
-      if e == "playerClick" then
-        if map[b] then print("  already seat " .. map[b])
-        else map[b] = seat; print("  " .. b .. " -> seat " .. seat); seat = seat + 1; break end
-      elseif e == "key" and a == keys.enter then
-        done = true; break
-      end
-    end
-  end
-  mapping = false
-  if next(map) then
-    S.detectors = map; saveSettings(); os.queueEvent("casino_settings"); print("Saved.")
+local function toggleCalibrate()
+  calibrating = not calibrating
+  os.queueEvent("casino_settings")
+  if calibrating then
+    print("CALIBRATE ON. Every seat now shows SET SEAT.")
+    print("Stand (or sit) where a player would be at")
+    print("each seat and tap its SET SEAT button.")
+    print("Type 'calibrate' again when you're done.")
   else
-    print("No change.")
+    local n = 0
+    for i = 1, 6 do if S.seatPos[i] then n = n + 1 end end
+    print("Calibrate OFF. " .. n .. " seat(s) set.")
   end
+end
+
+local function whoAt(seat)
+  seat = tonumber(seat)
+  if not seat or not S.seatPos[seat] then print("Usage: who <seat number> (seat must be set)"); return end
+  local list, raw = bank.playersNear(S.seatPos[seat], CONFIG.joinRange, { limit = 3 })
+  if #list == 0 then print("Nobody within " .. CONFIG.joinRange .. " blocks of seat " .. seat) end
+  for _, e in ipairs(list) do print(("%s  %.1f blocks"):format(e.name, e.d)) end
+  if #list == 0 and #raw > 0 then print("Raw: " .. table.concat(raw, " | ")) end
 end
 
 local HELP = {
@@ -1057,7 +1130,8 @@ local HELP = {
   "prefix <eco|none> admin command prefix",
   "bal <name>        test a balance read",
   "stats             handle, hold, swing",
-  "map               re-map seat detectors",
+  "calibrate         set where each seat is (on/off)",
+  "who <seat>        test who's standing at a seat",
   "pin               change PIN",
   "netpass           casino network password",
   "lock / quit",
@@ -1067,6 +1141,11 @@ local function console()
   term.clear(); term.setCursorPos(1, 1)
   term.setTextColor(colors.yellow); print("Blackjack table running"); term.setTextColor(colors.white)
   print("House account: " .. S.house)
+  if not next(S.seatPos) then
+    term.setTextColor(colors.orange)
+    print("Seats aren't set up yet: enter your PIN, then type 'calibrate'.")
+    term.setTextColor(colors.white)
+  end
   print("Enter PIN to manage the table.")
   local unlocked = false
   while true do
@@ -1087,8 +1166,8 @@ local function console()
         print(("Side bets $%d - $%d"):format(S.sideMin, S.sideMax))
         print(("Seats %d  |  Table %s"):format(S.seats, S.open and "OPEN" or "CLOSED"))
         print("House: " .. S.house .. "  |  prefix: " .. (S.ecoPrefix ~= "" and S.ecoPrefix or "none"))
-        local n = 0; for _ in pairs(S.detectors) do n = n + 1 end
-        print(n .. " detector(s) mapped")
+        local n = 0; for i = 1, 6 do if S.seatPos[i] then n = n + 1 end end
+        print(n .. " seat position(s) set")
       elseif cmd == "set" then
         local keyMap = { min = "mainMin", max = "mainMax", sidemin = "sideMin", sidemax = "sideMax", seats = "seats" }
         local key, val = keyMap[(wds[2] or ""):lower()], tonumber(wds[3])
@@ -1133,8 +1212,10 @@ local function console()
           print(("Swing: high +$%d / low -$%d"):format(g.peak, -g.trough))
           print(("Biggest round: won $%d / lost $%d"):format(g.bigWin, -g.bigLoss))
         end
-      elseif cmd == "map" then
-        mapDetectors()
+      elseif cmd == "calibrate" then
+        toggleCalibrate()
+      elseif cmd == "who" then
+        whoAt(wds[2])
       elseif cmd == "pin" then
         write("New PIN: "); local p = read("*")
         if p and #p >= 3 then S.pin = p; saveSettings(); print("PIN changed.") else print("Too short.") end
@@ -1171,15 +1252,7 @@ if not net.hasPassword() then
   if #p >= 4 then net.setPassword(p) elseif #p > 0 then print("Too short - skipped. Use 'netpass' later.") end
 end
 
--- auto-assign detectors (sorted by name) the first time
-if not next(S.detectors) then
-  local names = {}
-  for _, n in ipairs(peripheral.getNames()) do
-    if peripheral.getType(n) == "playerDetector" then names[#names + 1] = n end
-  end
-  table.sort(names)
-  for i, n in ipairs(names) do if i <= 6 then S.detectors[n] = i end end
-end
+S.detectors = nil   -- left over from the old detector version
 saveSettings()
 applyBankConfig()
 
@@ -1188,10 +1261,6 @@ if not hb then
   print("WARNING: couldn't read the house balance.")
   print("Reply was: " .. tostring(raw))
   print("Check the account name / prefix. Press any key.")
-  os.pullEvent("key")
-end
-if not next(S.detectors) then
-  print("WARNING: no player detectors found - nobody can sit. Press any key.")
   os.pullEvent("key")
 end
 
