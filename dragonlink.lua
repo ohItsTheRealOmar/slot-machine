@@ -5,8 +5,11 @@
           anything from 3x3 up). Speakers optional - every speaker on the
           computer / wired network plays.
   Run:    dragonlink
-  Terminal commands while running:
-          add <n> | set <n> | credits | jackpots | resetjp | demo hold | demo free | exit
+  Real money: run on a COMMAND COMPUTER with casino_slot.lua, casino_bank.lua
+          and casino_net.lua next to it (+ wireless/ender modem for the main
+          computer). Closest player plays; bets come out of their EconomyCraft
+          balance, wins go back in. Normal computer = practice credits.
+          Owner console on the computer: enter the PIN, then 'help'.
 
   Rules:
   * 5 reels x 3 rows, 243 WAYS - symbols pay left to right on adjacent reels,
@@ -30,6 +33,7 @@
 ------------------------------------------------------------------ CONFIG
 local CONFIG = {
   textScale     = 0.5,                   -- 0.5 = sharpest
+  -- creditFile no longer used (real money / practice lives in casino_slot)
   creditFile    = "dragonlink_credits.txt",
   jackpotFile   = "dragonlink_jackpots.txt",
   startCredits  = 5000,                  -- practice bankroll
@@ -222,6 +226,9 @@ if not term or not peripheral then
 end
 
 ------------------------------------------------------------------ PERIPHERALS
+local slot = require("casino_slot")
+slot.setup{ game = "dragonlink", kind = "Dragon Link", practiceCredits = CONFIG.startCredits }
+
 local mon = peripheral.find("monitor")
 if not mon then error("No monitor found - attach the monitor wall (5 wide x 4 tall)", 0) end
 local speakers = { peripheral.find("speaker") }
@@ -246,6 +253,13 @@ local function restorePalette()
   for c in pairs(PALETTE) do mon.setPaletteColour(c, term.nativePaletteColour(c)) end
 end
 
+-- the player on this machine (real money on a Command Computer)
+local seat = slot.seat(peripheral.getName(mon))
+local function creditLabel()
+  if not slot.LIVE then return "CREDITS" end
+  return seat:name() or "BALANCE"
+end
+
 ------------------------------------------------------------------ STATE
 local state = {
   credits = CONFIG.startCredits, betIdx = 1, lastWin = 0,
@@ -258,17 +272,9 @@ local state = {
   jp = { major = {}, grand = {} },
 }
 
-local function loadCredits()
-  if fs.exists(CONFIG.creditFile) then
-    local h = fs.open(CONFIG.creditFile, "r")
-    local v = tonumber(h.readAll()); h.close()
-    state.credits = v or 0
-  end
-end
-local function saveCredits()
-  local h = fs.open(CONFIG.creditFile, "w")
-  h.write(tostring(state.credits)); h.close()
-end
+-- state.credits just mirrors the player's balance (+ wins not paid yet)
+local function loadCredits() state.credits = seat:credits() end
+local function saveCredits() state.credits = seat:credits() end
 local function loadJP()
   if fs.exists(CONFIG.jackpotFile) then
     local h = fs.open(CONFIG.jackpotFile, "r")
@@ -650,25 +656,25 @@ local function drawPanel()
     local lamps = ""
     for i = 1, CONFIG.respins do lamps = lamps .. (i <= hs.shown and "\7 " or "- ") end
     boxes = {
-      {"CREDITS", fmt(state.credits), "4"}, {"BET", fmt(bet), "0"},
+      {creditLabel(), fmt(state.credits), "4"}, {"BET", fmt(bet), "0"},
       {"RESPINS", lamps, hs.shown > 0 and "e" or "8"}, {"HOLD WIN", fmt(state.holdWin), "5"},
     }
   elseif state.mode == "free" then
     boxes = {
-      {"CREDITS", fmt(state.credits), "4"}, {"BET", fmt(bet), "0"},
+      {creditLabel(), fmt(state.credits), "4"}, {"BET", fmt(bet), "0"},
       {"FREE GAME", (state.freeTotal - state.free) .. " / " .. state.freeTotal, "b"},
       {"FREE WIN", fmt(state.freeWin), "5"},
     }
   else
     boxes = {
-      {"CREDITS", fmt(state.credits), "4"}, {"BET", fmt(bet), "0"},
+      {creditLabel(), fmt(state.credits), "4"}, {"BET", fmt(bet), "0"},
       {"WAYS", "243", "0"}, {"WIN", fmt(state.lastWin), "5"},
     }
   end
   local bw = math.floor(W / 4)
   for i, b in ipairs(boxes) do
     local bx = 1 + (i - 1) * bw
-    ctext(bx, y, bw, b[1], "8", "f")
+    ctext(bx, y, bw, b[1]:sub(1, bw), "8", "f")
     ctext(bx, y + 1, bw, b[2], b[3], "f")
   end
   ctext(1, y + 2, W, state.msg or "", state.mode ~= "base" and "4" or "0", "f")
@@ -1091,16 +1097,13 @@ local runFreeGames
 local function doSpin(isFree)
   local bet = curBet()
   if not isFree then
-    if state.credits < bet and CONFIG.practiceMode then
-      state.credits = CONFIG.startCredits; saveCredits()
-      state.msg = "PRACTICE MODE - REFILLED TO " .. fmt(CONFIG.startCredits)
-      note("chime", 12); draw(); return
-    elseif state.credits < bet then
-      state.msg = "NOT ENOUGH CREDITS - SEE ATTENDANT"
-      note("didgeridoo", 4); draw(); return
-    end
-    state.credits = state.credits - bet
+    local ok, why, kind = seat:begin(bet)
     saveCredits()
+    if not ok then
+      state.msg = why
+      if kind == "welcome" then note("chime", 12) else note("didgeridoo", 4) end
+      draw(); return
+    end
     contribute(bet)
     state.lastWin = 0
   end
@@ -1180,7 +1183,7 @@ local function doSpin(isFree)
 
   if res.total > 0 then
     spinWin = res.total
-    state.credits = state.credits + res.total; saveCredits()
+    seat:win(res.total); saveCredits()
     if isFree then state.freeWin = state.freeWin + res.total else state.lastWin = 0 end
     for i, p in ipairs(res.total >= bet * 5 and {7, 12, 16, 19, 24} or {12, 16, 19}) do note("bell", p, 1); if i < 5 then sleep(0.06) end end
     if not isFree then rollUp("lastWin", res.total) else draw() end
@@ -1199,7 +1202,7 @@ local function doSpin(isFree)
     sleep(0.5)
     local won = holdAndSpin(grid, orbs, bet)
     spinWin = spinWin + won
-    state.credits = state.credits + won; saveCredits()
+    seat:win(won); saveCredits()
     if isFree then state.freeWin = state.freeWin + won else state.lastWin = spinWin end
     state.hl, state.dim = {}, false
     draw()
@@ -1271,6 +1274,8 @@ local function betMsg()
 end
 
 local function onTouch(x, y)
+  local used, usedMsg = seat:touch()
+  if used then state.msg = usedMsg; draw(); return end
   if state.info > 0 then
     state.info = state.info + 1
     if state.info > #INFO_PAGES then state.info = 0 end
@@ -1288,6 +1293,10 @@ local function onTouch(x, y)
   elseif id == "spin" then
     doSpin(false)
     if state.free > 0 then runFreeGames() end
+    local problem = seat:finish()
+    saveCredits()
+    if problem then state.msg = problem end
+    draw()
     return
   end
   draw()
@@ -1318,46 +1327,12 @@ local function gameLoop()
   end
 end
 
-local function adminLoop()
-  term.clear(); term.setCursorPos(1, 1)
-  print("DRAGON LINK running on monitor")
-  print("add <n> | set <n> | credits | jackpots | resetjp")
-  print("demo hold | demo free | exit")
-  while true do
-    write("> ")
-    local line = read() or ""
-    local cmd, arg = line:match("^(%S*)%s*(%S*)")
-    local n = tonumber(arg)
-    if cmd == "add" and n then
-      state.credits = state.credits + n; saveCredits()
-      print("Credits: " .. state.credits); os.queueEvent("credits_changed")
-    elseif cmd == "set" and n then
-      state.credits = n; saveCredits()
-      print("Credits: " .. state.credits); os.queueEvent("credits_changed")
-    elseif cmd == "credits" then
-      print("Credits: " .. state.credits)
-    elseif cmd == "jackpots" then
-      for i, bet in ipairs(CONFIG.betLevels) do
-        local v = jpValues(i)
-        print(("bet %d: MAJOR %s  GRAND %s"):format(bet, fmt(v.MAJOR), fmt(v.GRAND)))
-      end
-    elseif cmd == "resetjp" then
-      state.jp = { major = {}, grand = {} }; saveJP()
-      print("Progressive jackpots reset to seed"); os.queueEvent("credits_changed")
-    elseif cmd == "demo" and (arg == "hold" or arg == "free") then
-      state.force = arg
-      print("Next paid spin will trigger " .. (arg == "hold" and "HOLD & SPIN" or "FREE GAMES"))
-    elseif cmd == "exit" then
-      return
-    elseif cmd ~= "" then
-      print("?  add <n> | set <n> | credits | jackpots | resetjp | demo hold|free | exit")
-    end
-  end
-end
+-- walked-away players disappear from the screen
+seat:onChange(function() saveCredits(); os.queueEvent("credits_changed") end)
 
 loadCredits()
 loadJP()
-parallel.waitForAny(gameLoop, adminLoop)
+slot.run(gameLoop)
 restorePalette()
 mon.setBackgroundColor(colors.black); mon.clear()
 print("Dragon Link stopped.")
