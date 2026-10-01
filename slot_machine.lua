@@ -26,9 +26,10 @@
      on its own also counts as its own tiny station).
    - Every station this computer can see is auto-detected and started --
      nothing to configure per station.
-   - Each station runs its own independent practice-credit pile (no real
-     economy hookup in this version -- see the note at the bottom if you
-     want that back for a specific station later).
+   - REAL MONEY: on a Command Computer every station plays for the
+     server's EconomyCraft money through casino_slot.lua. Whoever stands
+     closest to a station is the player; bets come out of their balance
+     and wins go back in. On a normal computer it's practice credits.
    - If you have fewer Speakers than stations, they're shared round-robin
      across stations (station 1 gets speaker 1, station 2 gets speaker 2,
      and once speakers run out it wraps back to speaker 1, etc). Zero
@@ -40,13 +41,19 @@
 
   SETUP
    1. Build one or more monitor walls (each becomes its own station).
-   2. Wire/attach all of them to ONE Computer (Advanced Computer for
-      color).
+   2. Wire/attach all of them to ONE Command Computer (a normal
+      Advanced Computer works too, but only for practice credits).
    3. Optionally place one or more Speakers anywhere in range.
    4. Optionally drop a bg.nfp image next to this script -- every station
       uses the same one, each scaled to its own monitor's size.
-   5. On the computer: wget the raw URL of this file, then run it.
+   5. Put casino_slot.lua, casino_bank.lua and casino_net.lua next to it
+      (plus a wireless/ender modem so the main computer sees it).
+   6. On the computer: wget the raw URL of this file, then run it.
+   7. Enter the PIN on the computer, type 'calibrate', stand where a
+      player stands at each station and tap its screen.
 --]]
+
+local slot = require("casino_slot")
 
 local c = colors
 math.randomseed(os.epoch("utc"))
@@ -224,6 +231,7 @@ local function newMachine(mon, speaker, stationId)
   mon.setTextScale(0.5)
   local w, h = mon.getSize()
   local monName = peripheral.getName(mon)
+  local seat = slot.seat(monName)
 
   local function sfx(name, vol, pitch)
     if speaker then pcall(speaker.playSound, name, vol or 1, pitch or 1) end
@@ -531,7 +539,6 @@ local function newMachine(mon, speaker, stationId)
     table.insert(buttons, { label = label, x1 = x1, y1 = y1, x2 = x2, y2 = y1, action = action })
   end
 
-  local credits = 1000.00
   local bet = 10
   local betStep = 5
   local minBet, maxBet = 5, 200
@@ -549,7 +556,7 @@ local function newMachine(mon, speaker, stationId)
     end
     mon.setTextColor(colors.white)
     mon.setCursorPos(2, h - hudH)
-    mon.write("CREDITS: $" .. money(credits) .. "  (practice mode)")
+    mon.write(seat:hud())
 
     mon.setCursorPos(2, h - hudH + 1)
     mon.write("BET/LINE: $" .. money(bet) .. "  LINES: " .. linesPlayed .. "  TOTAL BET: $" .. money(totalBet())
@@ -868,7 +875,7 @@ local function newMachine(mon, speaker, stationId)
       end
     end
 
-    credits = credits + bonusTotal
+    seat:win(bonusTotal)
     bannerAnim("BONUS TOTAL: $" .. money(bonusTotal) .. "!", colors.yellow, 2)
   end
 
@@ -876,13 +883,14 @@ local function newMachine(mon, speaker, stationId)
   local spinning = false
   local function doSpin()
     if spinning then return end
-    if credits < totalBet() then
-      drawHud("NOT ENOUGH CREDITS", colors.red)
+    spinning = true
+    local ok, why, kind = seat:begin(totalBet())
+    if not ok then
+      spinning = false
+      drawHud(why, kind == "welcome" and colors.lime or colors.red)
       drawButtons()
       return
     end
-    spinning = true
-    credits = credits - totalBet()
     drawFrame()
 
     local grid = genGrid(baseWeights, nil)
@@ -893,7 +901,7 @@ local function newMachine(mon, speaker, stationId)
     local scatters = countScatters(grid)
 
     if win > 0 then
-      credits = credits + win
+      seat:win(win)
       flashWin(grid, hits)
       drawWinLines(winLines)
       if win > BIG_WIN_THRESHOLD then
@@ -912,7 +920,8 @@ local function newMachine(mon, speaker, stationId)
       runBonus(scatters)
     end
 
-    drawFrame()
+    local problem = seat:finish()
+    drawFrame(problem, colors.red)
     spinning = false
   end
 
@@ -964,7 +973,12 @@ local function newMachine(mon, speaker, stationId)
   local function inputLoop()
     while true do
       local event, p1, p2, p3 = os.pullEvent()
-      if event == "monitor_touch" and p1 == monName then
+      local used, usedMsg = false, nil
+      if event == "monitor_touch" and p1 == monName then used, usedMsg = seat:touch() end
+      if used then
+        drawHud(usedMsg, colors.yellow)
+        drawButtons()
+      elseif event == "monitor_touch" and p1 == monName then
         local x, y = p2, p3
         for _, b in ipairs(buttons) do
           if pointInButton(x, y, b) then
@@ -992,6 +1006,10 @@ local function newMachine(mon, speaker, stationId)
     end
   end
 
+  seat:onChange(function()
+    if not spinning then drawHud(); drawButtons() end
+  end)
+
   local function run()
     showStartScreen()
     currentGrid = genGrid(baseWeights, nil)
@@ -1012,6 +1030,8 @@ end
 -- merged wall/cluster (CC:Tweaked auto-merges adjacent same-network,
 -- same-scale monitor blocks into one peripheral), so one entry = one
 -- station, with no manual grouping needed.
+slot.setup{ game = "buffalo", kind = "Buffalo Bonus", practiceCredits = 1000 }
+
 local monitors = { peripheral.find("monitor") }
 if #monitors == 0 then
   error("No monitors found! Attach at least one monitor (wall) to this computer.")
@@ -1032,16 +1052,4 @@ for i, m in ipairs(machines) do
   print("  station " .. i .. " -> " .. m.monName)
 end
 
-parallel.waitForAll(table.unpack(runFns))
-
---[[
-  Want the real-money economy bridge (Player Detector + a server balance
-  hookup) back for a specific station? That used to be a standalone
-  section in this file (ECONOMY BRIDGE / PLAYER DETECTOR) -- it's been
-  pulled out for this multi-monitor version since it wasn't needed yet,
-  but it slots back in per-station: add a playerDetector + currentPlayer
-  + economyGetBalance/economyAdjustBalance inside newMachine(), same way
-  `credits` and `bet` already live there, and swap the relevant lines in
-  drawHud/doSpin/runBonus the same way the single-station version did.
-  Ask and I'll wire it back in for whichever station(s) need it.
-]]
+slot.run(table.unpack(runFns))
