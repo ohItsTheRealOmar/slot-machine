@@ -46,13 +46,21 @@
   SETUP
    1. Build the monitor wall(s) out of Advanced Monitors (made for a
       6-wide x 3-tall wall, but the layout scales to any size).
-   2. Attach them + an optional Speaker to one Advanced Computer.
-   3. wget the raw URL of this file and run it.
+   2. Attach them + an optional Speaker to one COMMAND Computer (a normal
+      Advanced Computer works too, but only for practice credits).
+   3. Put casino_slot.lua, casino_bank.lua and casino_net.lua next to it
+      (plus a wireless/ender modem so the main computer sees it).
+   4. wget the raw URL of this file and run it.
+   5. Enter the PIN on the computer, type 'calibrate', stand where a
+      player stands at each station and tap its screen.
 
-  Money is practice credits per station for now -- the real player
-  balance hookup (and the progressive GRAND) come later.
+  REAL MONEY (casino_slot.lua): on a Command Computer every station plays
+  for EconomyCraft money. Whoever stands closest to a station is the
+  player; bets come out of their balance, wins (incl. bonus) go back in.
+  Total bets are whole dollars ($1 - $1,000 with the denoms below).
 --]]
 
+local slot = require("casino_slot")
 local c = colors
 math.randomseed(os.epoch and os.epoch("utc") or os.time())
 
@@ -112,9 +120,9 @@ local COIN_TABLE = {
   { m = 1000, w = 0.03, tag = "GRAND", tripleOnly = true }, -- progressive later
 }
 
-local DENOMS = { 0.01, 0.05, 0.10, 0.25, 1.00, 5.00 }
+local DENOMS = { 0.02, 0.10, 0.20, 1.00, 2.00 }   -- x BET_CREDITS = whole-dollar bets
 local BET_CREDITS = { 50, 100, 150, 250, 500 }
-local START_CREDITS = 1000
+local START_CREDITS = 1000 -- practice mode only
 local BIG_WIN_X = 15 -- "BIG WIN" banner when a win is >= this x total bet
 local TEASE_FRAMES = 36 -- how many extra frames reel 5 spins on a tease
 
@@ -530,6 +538,7 @@ local function newMachine(mon, speaker, stationId)
   mon.setTextScale(0.5)
   local w, h = mon.getSize()
   local monName = peripheral.getName(mon)
+  local seat = slot.seat(monName)
 
   -- ---- sound ----
   local volume = 1.0
@@ -736,9 +745,8 @@ local function newMachine(mon, speaker, stationId)
   end
 
   -- ---- money / buttons / HUD ----
-  local credits = START_CREDITS
-  local denomIdx, betIdx = 3, 2
-  local function totalBet() return DENOMS[denomIdx] * BET_CREDITS[betIdx] end
+  local denomIdx, betIdx = 2, 1
+  local function totalBet() return math.floor(DENOMS[denomIdx] * BET_CREDITS[betIdx] * 100 + 0.5) / 100 end
 
   local buttons = {}
   local message, messageCol = "TOUCH SPIN TO PLAY", c.lightGray
@@ -746,7 +754,7 @@ local function newMachine(mon, speaker, stationId)
   local function drawHud()
     fillRect(1, hudY, w, 2, c.black)
     local vol = volume <= 0 and "MUTE" or string.format("%.1f", volume)
-    text(2, hudY, "CREDITS $" .. money(credits) .. "   DENOM $" .. money(DENOMS[denomIdx])
+    text(2, hudY, seat:hud() .. "   DENOM $" .. money(DENOMS[denomIdx])
       .. " x " .. BET_CREDITS[betIdx] .. " = BET $" .. money(totalBet()) .. "   VOL " .. vol, c.white, c.black)
     if message then text(2, msgY, message, messageCol or c.yellow, c.black) end
   end
@@ -1181,7 +1189,7 @@ local function newMachine(mon, speaker, stationId)
         end
       end
     end
-    credits = credits + total
+    seat:win(total)
     sfx("ui.toast.challenge_complete", 1, 1)
     banner("BONUS WIN $" .. money(total), c.yellow, 2.2, st.count .. " coins  -  " .. comboName(powers))
     return total
@@ -1193,12 +1201,13 @@ local function newMachine(mon, speaker, stationId)
   local function doSpin()
     if busy then return end
     local bet = totalBet()
-    if credits < bet then
-      setMessage("NOT ENOUGH CREDITS", c.red)
+    busy = true
+    local ok, why, kind = seat:begin(bet)
+    if not ok then
+      busy = false
+      setMessage(why, kind == "welcome" and c.lime or c.red)
       return
     end
-    busy = true
-    credits = credits - bet
     message = nil
     drawHud()
     fillRect(1, msgY, w, 1, c.black)
@@ -1212,7 +1221,7 @@ local function newMachine(mon, speaker, stationId)
 
     local win, hits = evaluateLines(grid, bet / #LINES)
     if win > 0 then
-      credits = credits + win
+      seat:win(win)
       flashWin(grid, hits)
       if win >= bet * BIG_WIN_X then
         sfx("ui.toast.challenge_complete", 1, 1)
@@ -1244,7 +1253,8 @@ local function newMachine(mon, speaker, stationId)
       setMessage("BONUS PAID $" .. money(bonusWin) .. "!", c.lime)
     end
 
-    drawHud()
+    local problem = seat:finish()
+    if problem then setMessage(problem, c.red) else drawHud() end
     busy = false
   end
 
@@ -1264,7 +1274,11 @@ local function newMachine(mon, speaker, stationId)
   local function inputLoop()
     while true do
       local ev, side, x, y = os.pullEvent("monitor_touch")
-      if side == monName and not busy then
+      local used, usedMsg = false, nil
+      if side == monName and not busy then used, usedMsg = seat:touch() end
+      if used then
+        setMessage(usedMsg, c.yellow)
+      elseif side == monName and not busy then
         for _, b in ipairs(buttons) do
           if x >= b.x1 and x <= b.x2 and y >= b.y1 and y <= b.y2 then
             local now = os.epoch("utc")
@@ -1291,6 +1305,8 @@ local function newMachine(mon, speaker, stationId)
     end
   end
 
+  seat:onChange(function() if not busy then drawHud() end end)
+
   local function run()
     showStartScreen()
     drawFrame()
@@ -1301,6 +1317,8 @@ local function newMachine(mon, speaker, stationId)
 end
 
 -- ============================= DISCOVER STATIONS =============================
+slot.setup{ game = "huffpuff", kind = "Huff N' Puff", practiceCredits = START_CREDITS }
+
 local monitors = { peripheral.find("monitor") }
 if #monitors == 0 then
   error("No monitors found! Attach at least one monitor (wall) to this computer.")
@@ -1316,4 +1334,4 @@ for i, mon in ipairs(monitors) do
 end
 print("Huff N' Puff: " .. #monitors .. " station(s), " .. #speakers .. " speaker(s). Running.")
 
-parallel.waitForAll(table.unpack(runFns))
+slot.run(table.unpack(runFns))
